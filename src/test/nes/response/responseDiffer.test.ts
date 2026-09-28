@@ -79,6 +79,48 @@ suite('ResponseDiffer', () => {
         });
     });
 
+    suite('converged streaming diffs', () => {
+        test('emits only an additive cursor-line change before convergence', () => {
+            const original = ['before();', 'call();', 'after();'];
+            const additive = differ.computeFastCursorLine(original, ['before();', 'call(extra);'], 1);
+            assert.deepStrictEqual(additive?.newLines, ['call(extra);']);
+            assert.strictEqual(additive?.lineRange.startLineNumber, 2);
+            assert.strictEqual(differ.computeFastCursorLine(original, ['before();', 'other();'], 1), undefined);
+            assert.strictEqual(differ.computeFastCursorLine(original, ['changed();', 'call(extra);'], 1), undefined);
+            assert.strictEqual(differ.computeFastCursorLine(
+                ['before();', '', 'after();'], ['before();', 'after()'], 1,
+            ), undefined);
+            assert.strictEqual(differ.computeFastCursorLine(
+                [''], ['after();'], 0, 'after();',
+            ), undefined);
+            assert.strictEqual(differ.computeFastCursorLine(
+                [''], ['after()'], 0, 'after();',
+            ), undefined);
+            assert.deepStrictEqual(differ.computeFastCursorLine(
+                [''], ['newCall();'], 0, 'after();',
+            )?.newLines, ['newCall();']);
+            assert.deepStrictEqual(differ.computeFastCursorLine(
+                ['// 😀 status'], ['// 😀 new status'], 0,
+            )?.newLines, ['// 😀 new status']);
+        });
+
+        test('waits for a complete unchanged anchor line', () => {
+            const original = ['keep();', 'old();', 'anchor();', 'later();'];
+            assert.deepStrictEqual(differ.computeConverged(original, ['keep();', 'new();']), []);
+            const edits = differ.computeConverged(original, ['keep();', 'new();', 'anchor();']);
+            assert.strictEqual(edits.length, 1);
+            assert.strictEqual(edits[0].lineRange.startLineNumber, 2);
+            assert.strictEqual(edits[0].lineRange.endLineNumberExclusive, 3);
+            assert.deepStrictEqual(edits[0].newLines, ['new();']);
+        });
+
+        test('does not infer a trailing deletion from an unfinished stream', () => {
+            const original = ['a', 'b', 'c', 'd'];
+            assert.deepStrictEqual(differ.computeConverged(original, ['a', 'b']), []);
+            assert.strictEqual(differ.compute(original, ['a', 'b']).length, 1);
+        });
+    });
+
     suite('exhaustion fallbacks', () => {
         test('response shorter than original — remaining original lines deleted', () => {
             const originalLines = ['a', 'b', 'c', 'd'];

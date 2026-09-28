@@ -26,6 +26,7 @@ import { IAsyncCompletionsManager, AsyncCompletionsManager } from './completions
 import { IMultilineStrategy } from './completions/ghost/multiline/types';
 import { DefaultMultilineStrategy } from './completions/ghost/multiline/DefaultMultilineStrategy';
 import { setWasmDirPath } from './completions/ghost/multiline/treeSitter/fileLoader';
+import { registerNeighborFileAccessTracking } from './completions/ghost/neighborFileAccess';
 
 // NES
 import { INesProvider, NextEditProvider } from './completions/nes/nextEditProvider';
@@ -40,6 +41,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Initialize WASM path for tree-sitter
     setWasmDirPath(context.extensionUri.fsPath);
+    context.subscriptions.push(registerNeighborFileAccessTracking());
 
     // Build DI container
     const builder = new InstantiationServiceBuilder();
@@ -79,6 +81,7 @@ export function activate(context: vscode.ExtensionContext) {
     // Seal
     const instantiationService = builder.seal();
     context.subscriptions.push(instantiationService);
+    context.subscriptions.push(instantiationService.invokeFunction(accessor => accessor.get(IRecentEditsProvider)).register());
 
     // Register LLM adapters
     registerLLMAdapters(instantiationService, ghostConfig, nesConfig, logService);
@@ -87,6 +90,10 @@ export function activate(context: vscode.ExtensionContext) {
     const ghostProvider = instantiationService.createInstance(GhostTextProvider);
     const nesProvider = instantiationService.createInstance(NextEditProvider);
     const statusBar = instantiationService.createInstance(StatusBarPanel);
+    statusBar.setCacheInvalidators(
+        () => ghostProvider.invalidateCachedCompletions(),
+        () => nesProvider.invalidateCachedEdits(),
+    );
 
     context.subscriptions.push(
         ghostProvider.register(),
@@ -110,6 +117,8 @@ function registerLLMAdapters(
     llmManager.register('completions', new OpenAICompletionAdapter(log));
     llmManager.register('chat/completions', new OpenAIChatCompletionAdapter());
     llmManager.register('fim/completions', new OpenAIFimCompletionAdapter(log));
+    llmManager.register('responses', new OpenAIResponseAdapter());
+    llmManager.register('messages', new AnthropicAdapter());
 }
 
 export function deactivate() {}

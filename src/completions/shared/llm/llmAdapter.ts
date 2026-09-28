@@ -1,5 +1,5 @@
 import { createServiceIdentifier } from '../../../di/services';
-import { Capabilities, LLMRequest, LLMResponse } from './llmRequest';
+import { Capabilities, CompletionExtra, LLMRequest, LLMResponse } from './llmRequest';
 import { NesSupportedEndpoint } from '../../../config/nesConfig';
 
 export const ILLMAdapterManager = createServiceIdentifier<ILLMAdapterManager>('ILLMAdapterManager');
@@ -40,10 +40,27 @@ export function applyThinkingParams(
                 body.reasoning_effort = effort;
                 break;
             case 'openai-gpt5':
-                body.reasoning = { effort };
+                body.reasoning_effort = effort;
                 break;
         }
     }
+}
+
+/** Match Copilot's `extra.context` request field without polluting FIM code. */
+export function applyPromptContext(
+    body: Record<string, unknown>,
+    context?: string[],
+    metadata?: CompletionExtra,
+): void {
+    if ((!context || context.length === 0) && (!metadata || Object.keys(metadata).length === 0)) return;
+    const extra = body.extra && typeof body.extra === 'object'
+        ? body.extra as Record<string, unknown>
+        : {};
+    body.extra = {
+        ...extra,
+        ...metadata,
+        ...(context && context.length > 0 ? { context } : {}),
+    };
 }
 
 export interface ILLMAdapterManager {

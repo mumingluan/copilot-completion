@@ -20,6 +20,41 @@ const N_LINES_TO_CONVERGE = 3;
 export class ResponseDiffer {
 
     compute(originalLines: string[], responseLines: string[]): LineReplacement[] {
+        return this._compute(originalLines, responseLines, true);
+    }
+
+    /** Edits anchored by later matching lines; safe to show before the response ends. */
+    computeConverged(originalLines: string[], completedResponseLines: string[]): LineReplacement[] {
+        return this._compute(originalLines, completedResponseLines, false);
+    }
+
+    /** Native NES can emit an additive cursor-line change without an anchor. */
+    computeFastCursorLine(
+        originalLines: string[],
+        completedResponseLines: string[],
+        cursorLineOffset: number,
+        nextDocumentLine?: string,
+    ): LineReplacement | undefined {
+        if (cursorLineOffset < 0 || cursorLineOffset >= originalLines.length
+            || completedResponseLines.length <= cursorLineOffset) return undefined;
+        for (let i = 0; i < cursorLineOffset; i++) {
+            if (completedResponseLines[i] !== originalLines[i]) return undefined;
+        }
+        const original = originalLines[cursorLineOffset];
+        const replacement = completedResponseLines[cursorLineOffset];
+        if (replacement === original || originalLines.includes(replacement)
+            || !isSubsequence(original, replacement)) return undefined;
+        if (original.trim() === '') {
+            const nextLine = originalLines[cursorLineOffset + 1] ?? nextDocumentLine;
+            if (nextLine !== undefined && (replacement === nextLine || nextLine.startsWith(replacement))) return undefined;
+        }
+        return new LineReplacement({
+            startLineNumber: cursorLineOffset + 1,
+            endLineNumberExclusive: cursorLineOffset + 2,
+        }, [replacement]);
+    }
+
+    private _compute(originalLines: string[], responseLines: string[], includeTrailingEdit: boolean): LineReplacement[] {
         const lineToIdxs = buildLineIndex(originalLines);
         const edits: LineReplacement[] = [];
         let origIdx = 0;
@@ -61,6 +96,7 @@ export class ResponseDiffer {
 
             // Handle exhaustion only when convergence was not reached
             if (!converged) {
+                if (!includeTrailingEdit) break;
                 if (respIdx >= responseLines.length && origIdx < originalLines.length) {
                     edits.push(new LineReplacement(
                         {
@@ -100,6 +136,17 @@ export class ResponseDiffer {
 
 function isSignificant(s: string): boolean {
     return /[a-zA-Z1-9]+/.test(s);
+}
+
+function isSubsequence(original: string, replacement: string): boolean {
+    let index = 0;
+    // VS Code positions and string offsets are UTF-16 code units. Iterating
+    // by code point here misses an unchanged surrogate pair (for example an
+    // emoji in a comment) and delays an otherwise safe additive preview.
+    for (let offset = 0; offset < replacement.length && index < original.length; offset++) {
+        if (replacement[offset] === original[index]) index++;
+    }
+    return index === original.length;
 }
 
 function buildLineIndex(lines: string[]): Map<string, number[]> {

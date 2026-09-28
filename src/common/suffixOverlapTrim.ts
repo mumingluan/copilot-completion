@@ -36,10 +36,11 @@ export class TrimCompletionSuffixOverlap {
 			return 0;
 		}
 
-		// Map back: the overlap count is in terms of non-empty lines.
-		// We need to return the number of ORIGINAL lines to trim.
-		const trimUpToOrigIdx = newLinesMapped[overlap - 1].origIdx;
-		return trimUpToOrigIdx + 1;
+		// The matched non-empty lines are at the END of the completion.
+		// Convert their first original index to a count measured from that end;
+		// using the index of the first `overlap` lines can erase useful code.
+		const firstOverlappingLine = newLinesMapped[newLinesMapped.length - overlap].origIdx;
+		return newLines.length - firstOverlappingLine;
 	}
 
 	public trimEditWithDocument(

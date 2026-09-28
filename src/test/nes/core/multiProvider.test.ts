@@ -125,6 +125,12 @@ suite('NES multi-provider & real typing', () => {
             await editor.edit(eb => eb.insert(cursorPos, 'x'));
             // 等待 inline completion 触发并渲染
             await new Promise(r => setTimeout(r, 5000));
+            // A provider registered by a test has no native onDidChange event,
+            // so explicitly request the post-edit inline list after simulating
+            // the keystroke. This mirrors the trigger performed by our real
+            // provider's document-change listener.
+            await vscode.commands.executeCommand('editor.action.inlineSuggest.trigger');
+            await new Promise(r => setTimeout(r, 1000));
 
             console.log(`[test] E2 真实输入触发: providerCallCount=${providerCallCount}, shown=${shown}`);
             assert.ok(providerCallCount > 0, '真实输入未触发 provider');

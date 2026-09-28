@@ -58,15 +58,9 @@ export function getEditDiffHistory(
         allDiffs.push(docDiff);
     }
 
-    const totalDiffs = allDiffs.length;
-    const numberedDiffs = allDiffs.reverse().map(
-        (diff, i) => `# Edit ${i + 1}/${totalDiffs}\n${diff}`,
-    );
-    let promptPiece = numberedDiffs.join('\n\n');
-    if (numberedDiffs.length > 0) {
-        promptPiece = '# From Oldest To Newest\n' + promptPiece;
-        promptPiece += '\n';
-    }
+    // The history is stored newest first, but the model sees diffs in
+    // chronological order, with the same plain unified-diff framing as NES.
+    const promptPiece = allDiffs.reverse().join('\n\n') + (allDiffs.length > 0 ? '\n' : '');
 
     return { promptPiece, nDiffs: allDiffs.length, totalTokens: totalTokensConsumed };
 }

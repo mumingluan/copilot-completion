@@ -2,6 +2,14 @@ import * as assert from 'assert';
 import { GhostCompletionsCache } from '../../completions/ghost/completionsCache';
 
 suite('GhostCompletionsCache', () => {
+    test('does not reuse a matching prefix from another source scope', () => {
+        const cache = new GhostCompletionsCache();
+        cache.append('const value = ', '', { text: 'fromA', finishReason: 'stop' }, 'file-a:model-a');
+        assert.strictEqual(cache.findAll('const value = ', '', 'file-b:model-a').length, 0);
+        assert.strictEqual(cache.findAll('const value = ', '', 'file-a:model-b').length, 0);
+        assert.strictEqual(cache.findAll('const value = f', '', 'file-a:model-a')[0].text, 'romA');
+    });
+
     test('should find cached completion by exact prefix+suffix', () => {
         const cache = new GhostCompletionsCache();
         cache.append('function hello()', '{', { text: '  console.log("hi");', finishReason: 'stop' });
@@ -71,5 +79,31 @@ suite('GhostCompletionsCache', () => {
         cache.append('p', 's', { text: 'a', finishReason: 'stop' });
         cache.append('p', 's', { text: 'b', finishReason: 'stop' });
         assert.strictEqual(cache.findAll('p', 's').length, 2);
+    });
+
+    test('should not accumulate the same network choice twice', () => {
+        const cache = new GhostCompletionsCache();
+        cache.append('prefix', 'suffix', { text: 'completion', finishReason: 'stop' });
+        cache.append('prefix', 'suffix', { text: 'completion', finishReason: 'stop' });
+        assert.strictEqual(cache.findAll('prefix', 'suffix').length, 1);
+    });
+
+    test('keeps the first candidate while cycling adds alternatives', () => {
+        const cache = new GhostCompletionsCache();
+        cache.append('prefix', 'suffix', { text: 'first', finishReason: 'stop' });
+        cache.append('prefix', 'suffix', { text: 'second', finishReason: 'stop' });
+        const choices = cache.findAll('prefix', 'suffix');
+        assert.deepStrictEqual(choices.map(choice => choice.text), ['first', 'second']);
+    });
+
+    test('keeps the first candidate after more than ten cycling alternatives', () => {
+        const cache = new GhostCompletionsCache();
+        cache.append('prefix', 'suffix', { text: 'first', finishReason: 'stop' });
+        for (let index = 0; index < 12; index++) {
+            cache.append('prefix', 'suffix', { text: `alternative-${index}`, finishReason: 'stop' });
+        }
+        const choices = cache.findAll('prefix', 'suffix');
+        assert.strictEqual(choices.length, 13);
+        assert.strictEqual(choices[0].text, 'first');
     });
 });

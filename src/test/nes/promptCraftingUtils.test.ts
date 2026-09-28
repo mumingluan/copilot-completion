@@ -1,5 +1,19 @@
 import * as assert from 'assert';
-import { renderCompletionPrompt } from '../../completions/nes/promptCraftingUtils';
+import { renderCompletionPrompt, toUniquePath } from '../../completions/nes/promptCraftingUtils';
+import { DocumentId } from '../../completions/nes/stubs/types';
+
+suite('toUniquePath', () => {
+    test('compares Windows drive letters without changing the relative result', () => {
+        const documentId = DocumentId.create('file:///C:/Project/src/main.ts');
+        assert.strictEqual(toUniquePath(documentId, '/c:/Project'),
+            process.platform === 'win32' ? 'src/main.ts' : documentId.path);
+    });
+
+    test('preserves a path outside the workspace root', () => {
+        const documentId = DocumentId.create('file:///C:/Other/src/main.ts');
+        assert.strictEqual(toUniquePath(documentId, '/c:/Project'), documentId.path);
+    });
+});
 
 suite('renderCompletionPrompt', () => {
 
@@ -33,28 +47,26 @@ suite('renderCompletionPrompt', () => {
         assert.ok(!result.includes('{user}'));
     });
 
-    test('handles literal {system} in content (known limitation - bidirectional)', () => {
-        // 已知限制：`.replace()` 只替换首次出现。
-        // system 中的 {user} 不会被替换（{user} 替换只命中模板中的第一个），
-        // user 中的 {system} 也不会被替换（{system} 替换已执行完毕）。
+    test('preserves literal placeholders inside inserted content', () => {
         const result = renderCompletionPrompt(DEFAULT_TEMPLATE, 'literal {user}', 'literal {system}');
-        assert.ok(result.includes('{user}'));   // system content 中的 {user} 保留
-        assert.ok(result.includes('{system}')); // user content 中的 {system} 保留
+        assert.ok(result.includes('literal {user}<|im_end|>'));
+        assert.ok(result.includes('literal {system}<|im_end|>'));
     });
 
-    test('system only contains {user} literal (known limitation)', () => {
-        // system content 中的 {user} 先被 {user} 替换匹配到（位置在模板 {user} 之前），
-        // 导致模板中的 {user} 占位符保留不替换
+    test('fills the user slot when system text contains a user placeholder', () => {
         const result = renderCompletionPrompt(DEFAULT_TEMPLATE, 'explain how to use {user}', 'Hello');
-        assert.ok(result.includes('{user}'));           // 模板中的 {user} 占位符未被替换
-        assert.ok(result.includes('explain how to use Hello')); // system 中的 {user} 先被匹配替换
+        assert.ok(result.includes('explain how to use {user}<|im_end|>'));
+        assert.ok(result.includes('Hello<|im_end|>'));
     });
 
-    test('user only contains {system} literal (known limitation)', () => {
-        // user content 中的 {system} 不会被替换（{system} 替换已执行完毕）
+    test('keeps system placeholders in user text', () => {
         const result = renderCompletionPrompt(DEFAULT_TEMPLATE, 'You are helpful', 'explain the {system} concept');
-        assert.ok(result.includes('{system}'));
         assert.ok(result.includes('explain the {system} concept'));
+    });
+
+    test('keeps replacement-like characters in both messages', () => {
+        const result = renderCompletionPrompt('{system}|{user}', 'say $& and $\' here', 'show $` there');
+        assert.strictEqual(result, 'say $& and $\' here|show $` there');
     });
 
     test('preserves trailing newlines from template', () => {

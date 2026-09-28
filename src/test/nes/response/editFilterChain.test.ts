@@ -3,7 +3,6 @@ import {
     EmptyEditFilter,
     NoopEditFilter,
     WhitespaceOnlyFilter,
-    CommentOnlyFilter,
     EditFilterChain,
 } from '../../../completions/nes/response/editFilterChain';
 
@@ -50,28 +49,15 @@ suite('WhitespaceOnlyFilter', () => {
         );
     });
 
+    test('allows interior spacing changes by default', () => {
+        const chain = new EditFilterChain();
+        assert.strictEqual(chain.apply(['const value = 1;'], ['const value  =  1;']), 'const value = 1;');
+    });
+
     test('accepts actual content change', () => {
         const filter = new WhitespaceOnlyFilter();
         assert.strictEqual(
             filter.shouldReject(['new code'], ['old code']),
-            false,
-        );
-    });
-});
-
-suite('CommentOnlyFilter', () => {
-    test('rejects comment-only edit', () => {
-        const filter = new CommentOnlyFilter();
-        assert.strictEqual(
-            filter.shouldReject(['// comment', '# also comment', '/* block */'], ['old']),
-            true,
-        );
-    });
-
-    test('accepts edit with non-comment lines', () => {
-        const filter = new CommentOnlyFilter();
-        assert.strictEqual(
-            filter.shouldReject(['realCode();', '// comment'], ['old']),
             false,
         );
     });
@@ -96,16 +82,16 @@ suite('EditFilterChain', () => {
         assert.strictEqual(result, undefined);
     });
 
-    test('returns undefined on whitespace-only change', () => {
+    test('keeps a substantive line with an interior whitespace-only change', () => {
         const chain = new EditFilterChain();
-        const result = chain.apply(['  hello  '], ['hello']);
-        assert.strictEqual(result, undefined);
+        const result = chain.apply(['hello  world'], ['hello world']);
+        assert.strictEqual(result, 'hello  world');
     });
 
-    test('returns undefined on comment-only change', () => {
+    test('keeps a substantive comment-only change', () => {
         const chain = new EditFilterChain();
-        const result = chain.apply(['// todo'], ['old']);
-        assert.strictEqual(result, undefined);
+        const result = chain.apply(['// explain the next step'], ['// old note']);
+        assert.strictEqual(result, '// explain the next step');
     });
 
     test('custom filters can be injected', () => {

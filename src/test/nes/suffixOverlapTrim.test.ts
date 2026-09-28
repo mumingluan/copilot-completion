@@ -32,4 +32,14 @@ suite('TrimNESResponseSuffixOverlap', () => {
         const overlap = trimmer.calculateOverlap(newLines, suffixLines);
         assert.ok(overlap >= 0);
     });
+
+    test('counts only the overlapping tail when blank and useful lines precede it', () => {
+        for (const type of ['low', 'high'] as const) {
+            const trimmer = new TrimCompletionSuffixOverlap(0.6, type);
+            const lines = ['', '    return result;', '}'];
+            const overlap = trimmer.calculateOverlap(lines, ['', '}']);
+            assert.strictEqual(overlap, 1);
+            assert.deepStrictEqual(lines.slice(0, -overlap), ['', '    return result;']);
+        }
+    });
 });

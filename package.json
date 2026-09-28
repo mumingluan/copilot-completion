@@ -6,19 +6,19 @@
   "engines": {
     "vscode": "^1.132.0"
   },
-	"buildType": "dev",
-	"publisher": "young-triangle",
-	"homepage": "https://github.com/spite-triangle/copilot-completion",
-	"license": "SEE LICENSE IN LICENSE.txt",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/spite-triangle/copilot-completion.git"
-	},
+  "buildType": "dev",
+  "publisher": "young-triangle",
+  "homepage": "https://github.com/mumingluan/copilot-completion",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mumingluan/copilot-completion.git"
+  },
   "categories": [
-		"AI",
-		"Programming Languages"
+    "AI",
+    "Programming Languages"
   ],
-  "keywords":[
+  "keywords": [
     "ai",
     "completion",
     "fim",
@@ -38,16 +38,71 @@
       {
         "command": "cc-completion.togglePanel",
         "title": "Toggle Copilot Completion Panel"
+      },
+      {
+        "command": "cc-completion.toggleLanguage",
+        "title": "Toggle Inline Suggestions for Current Language"
+      },
+      {
+        "command": "cc-completion.openSettings",
+        "title": "Open Copilot Completion Settings"
+      },
+      {
+        "command": "cc-completion.clearCache",
+        "title": "Clear Copilot Completion Cache"
+      },
+      {
+        "command": "cc-completion.trigger",
+        "title": "Trigger Copilot Inline Completion"
       }
     ],
     "configuration": {
       "title": "CC Completion",
       "properties": {
+        "cc-completion.enable": {
+          "type": "object",
+          "default": {
+            "*": true
+          },
+          "description": "Enable inline completions by language ID. Individual languages override the * fallback.",
+          "additionalProperties": {
+            "type": "boolean"
+          }
+        },
+        "cc-completion.exclude": {
+          "type": "array",
+          "default": [],
+          "description": "Glob patterns for files where inline completion and next edit suggestions are disabled.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cc-completion.ignoreWhenSuggestVisible": {
+          "type": "boolean",
+          "default": false,
+          "description": "Temporarily hide AI inline suggestions while the regular IntelliSense suggestion list is visible."
+        },
+        "cc-completion.respectSelectedCompletionInfo": {
+          "type": "boolean",
+          "description": "Build ghost completions from the selected IntelliSense item while its list is open. Defaults to on only when editor quick suggestions are disabled."
+        },
+        "cc-completion.ghost.speculativePrefetch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prefetch the next ghost-text completion after typing to reduce visible latency."
+        },
+        "cc-completion.nes.speculativePrefetch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Prefetch the next edit after accepting a NES suggestion to reduce visible latency."
+        },
         "cc-completion.wordPatterns": {
           "type": "object",
           "default": {},
           "description": "Per-language wordPattern additions (appended to the built-in pattern, not replacing it). Only languages with an explicit key (or the \"*\" fallback) are affected; other languages keep their native wordPattern. Keys are language IDs; \"*\" is a fallback for languages without an explicit key. Values are regex fragments, optionally wrapped as /fragment/flags (non-g flags like i/m/u are applied; the stateful g flag is stripped).",
-          "additionalProperties": { "type": "string" }
+          "additionalProperties": {
+            "type": "string"
+          }
         },
         "cc-completion.ghost.baseUrl": {
           "type": "string",
@@ -73,12 +128,21 @@
           "default": "completions",
           "description": "LLM API endpoint for GHOST. 'completions' uses /completions with an inline FIM prompt template; 'fim/completions' uses /fim/completions with separate prompt and suffix."
         },
+        "cc-completion.ghost.contextPlacement": {
+          "type": "string",
+          "enum": [
+            "extra",
+            "prefix"
+          ],
+          "default": "prefix",
+          "description": "Where GHOST sends diagnostics, recent edits and related code. 'prefix' lets standard completion servers see this context; use 'extra' for a server that supports Copilot's extra.context field."
+        },
         "cc-completion.ghost.stops": {
           "type": "array",
           "default": [],
-          "description": "stop marks for response generation.",
+          "description": "Custom stop sequences for GHOST generation. Empty uses Copilot's language-specific defaults.",
           "items": {
-            "type":"string"
+            "type": "string"
           }
         },
         "cc-completion.ghost.promptTemplate": {
@@ -88,8 +152,8 @@
         },
         "cc-completion.ghost.capabilities.limits.max_output_tokens": {
           "type": "number",
-          "default": 256,
-          "description": "Max output tokens for GHOST (hard cap)"
+          "default": 500,
+          "description": "Maximum output tokens for GHOST requests"
         },
         "cc-completion.ghost.capabilities.limits.max_context_window_tokens": {
           "type": "number",
@@ -98,33 +162,19 @@
         },
         "cc-completion.ghost.capabilities.limits.delay": {
           "type": "number",
-          "default": 200,
-          "description": "Minimum delay (ms) between GHOST network requests"
-        },
-        "cc-completion.ghost.suffixOverlapThreshold": {
-          "type": "number",
-          "default": 0.6,
-          "description": "Suffix overlap similarity threshold for GHOST completion trimming"
-        },
-        "cc-completion.ghost.suffixOverlapType": {
-          "type": "string",
-          "enum": [
-            "low",
-            "high"
-          ],
-          "default": "low",
-          "description": "Suffix overlap detection type for GHOST"
+          "default": 0,
+          "description": "Optional minimum interval (ms) between GHOST network requests; 0 uses Copilot-style request timing"
         },
         "cc-completion.ghost.presencePenalty": {
           "type": "number",
-          "default": 1,
+          "default": 0,
           "minimum": -2,
           "maximum": 2,
           "description": "Presence penalty for GHOST completions (-2.0 to 2.0). Positive values penalize new tokens based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics."
         },
         "cc-completion.ghost.frequencyPenalty": {
           "type": "number",
-          "default": 0.2,
+          "default": 0,
           "minimum": -2,
           "maximum": 2,
           "description": "Frequency penalty for GHOST completions (-2.0 to 2.0). Positive values penalize new tokens based on their existing frequency in the text so far, decreasing the model's likelihood to repeat the same line verbatim."
@@ -149,11 +199,18 @@
           "default": "gpt-4o",
           "description": "NES model name"
         },
+        "cc-completion.nes.stream": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use SSE streaming for NES edits. Disable this for endpoints that only return a complete response."
+        },
         "cc-completion.nes.endpoint": {
           "type": "string",
           "enum": [
             "chat/completions",
-            "completions"
+            "completions",
+            "responses",
+            "messages"
           ],
           "default": "chat/completions",
           "description": "LLM API endpoint for NES"
@@ -165,7 +222,10 @@
             "openai-o",
             "openai-gpt5",
             "deepseek",
-            "qwen"
+            "qwen",
+            "moonshot",
+            "minimax",
+            "anthropic"
           ],
           "default": "standard",
           "description": "Model family for NES thinking mode"
@@ -177,7 +237,7 @@
         },
         "cc-completion.nes.promptTemplate": {
           "type": "string",
-          "default": "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n",
+          "default": "<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n\n",
           "description": "NES prompt template. Use {system} and {user} placeholders."
         },
         "cc-completion.nes.capabilities.limits.max_context_window_tokens": {
@@ -193,18 +253,33 @@
         "cc-completion.nes.capabilities.supports.reasoning_effort": {
           "type": "string",
           "enum": [
+            "none",
             "minimal",
             "low",
             "medium",
             "high",
-            "xhigh"
+            "xhigh",
+            "max"
           ],
+          "default": "medium",
           "description": "Supported reasoning effort levels"
+        },
+        "cc-completion.nes.allowWhitespaceOnlyChanges": {
+          "type": "boolean",
+          "scope": "language-overridable",
+          "default": true,
+          "description": "Allow NES to suggest interior whitespace and line-wrapping changes. Leading or trailing whitespace-only changes are still ignored."
+        },
+        "cc-completion.nes.allowImportChanges": {
+          "type": "boolean",
+          "scope": "language-overridable",
+          "default": true,
+          "description": "Allow NES to suggest import statement edits. Disable to filter edits that add, remove, or change imports."
         },
         "cc-completion.nes.suffixOverlapThreshold": {
           "type": "number",
-          "default": 0.95,
-          "description": "Suffix overlap similarity threshold for NES response trimming"
+          "default": 1,
+          "description": "NES duplicate-line trimming: 1 uses exact line matches like native Copilot; lower values opt into fuzzy suffix matching"
         },
         "cc-completion.nes.suffixOverlapType": {
           "type": "string",
@@ -213,21 +288,26 @@
             "high"
           ],
           "default": "high",
-          "description": "Suffix overlap detection type"
+          "description": "Fuzzy NES suffix overlap detection type when the threshold is below 1"
         },
         "cc-completion.nes.presencePenalty": {
           "type": "number",
-          "default": 1,
+          "default": 0,
           "minimum": -2,
           "maximum": 2,
           "description": "Presence penalty for NES (-2.0 to 2.0). Positive values penalize new tokens based on whether they appear in the text so far."
         },
         "cc-completion.nes.frequencyPenalty": {
           "type": "number",
-          "default": 0.2,
+          "default": 0,
           "minimum": -2,
           "maximum": 2,
           "description": "Frequency penalty for NES (-2.0 to 2.0). Positive values penalize new tokens based on their existing frequency."
+        },
+        "cc-completion.nes.nextCursorPrediction.jumpWithoutEdit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show a standalone cursor jump when prediction finds a location but the next-edit model finds no edit. Off matches Copilot's default next-cursor behavior."
         }
       }
     }
@@ -249,6 +329,7 @@
     "@types/vscode": "^1.125.0",
     "@vscode/test-cli": "^0.0.12",
     "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^4.0.0",
     "copy-webpack-plugin": "^14.0.0",
     "eslint": "^9.39.3",
     "ts-loader": "^9.5.4",
@@ -259,6 +340,8 @@
     "webpack-cli": "^6.0.1"
   },
   "dependencies": {
+    "@microsoft/tiktokenizer": "1.0.10",
+    "tree-sitter-wasms": "^0.1.13",
     "web-tree-sitter": "^0.23.2"
   }
 }

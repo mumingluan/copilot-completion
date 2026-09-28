@@ -13,6 +13,15 @@ export interface Capabilities {
     reasoning_effort?: string;
 }
 
+/** Structured completion metadata understood by Copilot-compatible gateways. */
+export interface CompletionExtra {
+    language?: string;
+    next_indent?: number;
+    trim_by_indentation?: boolean;
+    prompt_tokens?: number;
+    suffix_tokens?: number;
+}
+
 export interface LLMRequest {
     model: string;
     baseUrl: string;
@@ -21,6 +30,9 @@ export interface LLMRequest {
     messages?: ChatMessage[];
     prompt?: string;
     suffix?:string;
+    /** Auxiliary context sent separately from source code in completion APIs. */
+    context?: string[];
+    extra?: CompletionExtra;
     max_tokens: number;
     temperature: number;
     n?: number;
@@ -41,7 +53,14 @@ export interface TokenUsage {
 export interface LLMResponse {
     text: string;
     finishReason: string;
+    choices?: Array<{ text: string; finishReason: string }>;
     usage?: TokenUsage;
+}
+
+/** Output-limit and interrupted responses may end inside a code edit or cursor coordinate. */
+export function isIncompleteLLMResponse(response: LLMResponse | undefined): boolean {
+    return /^(length|max_tokens|max_output_tokens|incomplete|content_filter|failed|cancelled|error)$/i
+        .test(response?.finishReason ?? '');
 }
 
 export class LLMError extends Error {

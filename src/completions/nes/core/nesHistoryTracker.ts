@@ -3,6 +3,7 @@ import { DocumentId, IXtabHistoryEntry } from '../stubs/types';
 import { StringText } from '../stubs/abstractText';
 import { StringEdit, StringReplacement } from '../stubs/stringEdit';
 import { OffsetRange } from '../stubs/offsetRange';
+import { isSourceDocumentUri } from '../../shared/documentEligibility';
 
 /**
  * Tracks document edits and visible ranges to build xtabHistory
@@ -45,10 +46,10 @@ export class NesHistoryTracker implements vscode.Disposable {
     private readonly _mergeLineGap = 2;
 
     constructor() {
-        // Seed _prevContents from ALL open documents (not just visible ones).
-        // Fix: previously only seeded from visibleTextEditors, missing background tabs.
+        // Seed edit baselines for every open document. Only visible editors
+        // contribute viewed-file history, as in the native tracker.
         for (const doc of vscode.workspace.textDocuments) {
-            if (doc.uri.scheme === 'file' || doc.uri.scheme === 'untitled') {
+            if (isSourceDocumentUri(doc.uri)) {
                 this._prevContents.set(doc.uri.toString(), doc.getText());
                 this._addOrUpdateVisibleRangeEntry(doc);
             }
@@ -56,7 +57,7 @@ export class NesHistoryTracker implements vscode.Disposable {
 
         this._disposables.push(
             vscode.workspace.onDidOpenTextDocument(doc => {
-                if (doc.uri.scheme === 'file' || doc.uri.scheme === 'untitled') {
+                if (isSourceDocumentUri(doc.uri)) {
                     const key = doc.uri.toString();
                     if (!this._prevContents.has(key)) {
                         this._prevContents.set(key, doc.getText());
@@ -70,7 +71,7 @@ export class NesHistoryTracker implements vscode.Disposable {
             // Reactive visible-range tracking (replaces on-demand snapshot)
             vscode.window.onDidChangeTextEditorVisibleRanges(e => {
                 const doc = e.textEditor.document;
-                if (doc.uri.scheme === 'file' || doc.uri.scheme === 'untitled') {
+                if (isSourceDocumentUri(doc.uri)) {
                     this._updateVisibleRanges(doc, e.textEditor.visibleRanges);
                 }
             }),
@@ -104,7 +105,7 @@ export class NesHistoryTracker implements vscode.Disposable {
 
     private _onDocumentChanged(e: vscode.TextDocumentChangeEvent): void {
         const doc = e.document;
-        if (doc.uri.scheme !== 'file' && doc.uri.scheme !== 'untitled') return;
+        if (!isSourceDocumentUri(doc.uri)) return;
         if (e.contentChanges.length === 0) return;
 
         const key = doc.uri.toString();
@@ -262,11 +263,13 @@ export class NesHistoryTracker implements vscode.Disposable {
         const editor = vscode.window.visibleTextEditors.find(
             e => e.document.uri.toString() === doc.uri.toString(),
         );
-        const visibleRanges: readonly vscode.Range[] = editor?.visibleRanges ?? [new vscode.Range(0, 0, doc.lineCount, 0)];
-        this._updateVisibleRanges(doc, visibleRanges);
+        if (editor) {
+            this._updateVisibleRanges(doc, editor.visibleRanges);
+        }
     }
 
     private _updateVisibleRanges(doc: vscode.TextDocument, ranges: readonly vscode.Range[]): void {
+        if (ranges.length === 0) return;
         const key = doc.uri.toString();
         const latest = this._idToLatest.get(key);
 

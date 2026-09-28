@@ -10,4 +10,6 @@ export interface INeighborFileSnippet {
     readonly snippet: string;
     readonly lineRange: LineRange0Based;
     readonly score: number;
+    /** Cursor hover/signature facts are not a slice of the source file. */
+    readonly kind?: 'facts';
 }

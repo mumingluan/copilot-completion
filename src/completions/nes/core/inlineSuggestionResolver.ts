@@ -5,11 +5,6 @@ export interface InlineSuggestionEdit {
     readonly newText: string;
 }
 
-/** Normalize document text: replace CRLF → LF for consistent comparison. */
-function getTextNormalized(doc: vscode.TextDocument, range: vscode.Range): string {
-    return doc.getText(range).replace(/\r\n/g, '\n');
-}
-
 /**
  * Determines whether an edit can be displayed as an inline (ghost text) suggestion
  * at the cursor position. If so, returns the possibly-adjusted range and text.
@@ -22,25 +17,67 @@ export class InlineSuggestionResolver {
         range: vscode.Range,
         newText: string,
     ): InlineSuggestionEdit | undefined {
+        // The ordinary same-line path must run first.  In particular, an empty
+        // insertion range at the cursor must not absorb the existing suffix of
+        // the line while rebasing.
+        if (range.start.line === range.end.line && range.start.line === cursorPos.line) {
+            const sameLineEdit = this._validateSameLineGhostText(cursorPos, doc, range, newText);
+            if (sameLineEdit) return sameLineEdit;
+        }
+
+        // Match VS Code's advanced NES path: re-express an edit that touches
+        // surrounding lines as a replacement from the cursor to this line's end.
+        // This is what lets a multi-line next edit render as normal ghost text.
+        const cursorEdit = this._tryRebaseAsCursorEdit(cursorPos, doc, range, newText);
+        if (cursorEdit) {
+            return cursorEdit;
+        }
+
+        // Preserve the fallback for an empty insertion at the start of the
+        // next line. With advanced rebasing enabled this is usually subsumed
+        // above, but it remains necessary when the line cannot be represented
+        // as an equivalent cursor edit.
         const nextLineInsertion = this._tryAdjustNextLineInsertion(cursorPos, doc, range, newText);
         if (nextLineInsertion) {
             return nextLineInsertion;
         }
 
-        let effectiveRange = range;
-        let effectiveText = newText;
+        return undefined;
+    }
 
-        if (effectiveRange.start.line !== effectiveRange.end.line) {
-            const stripped = this._stripCommonLinePrefix(doc, effectiveRange, effectiveText);
-            effectiveRange = stripped.range;
-            effectiveText = stripped.newText;
-        }
+    private _tryRebaseAsCursorEdit(
+        cursorPos: vscode.Position,
+        doc: vscode.TextDocument,
+        range: vscode.Range,
+        newText: string,
+    ): InlineSuggestionEdit | undefined {
+        const cursorOffset = doc.offsetAt(cursorPos);
+        const lineEnd = doc.lineAt(cursorPos.line).range.end;
+        const lineEndOffset = doc.offsetAt(lineEnd);
+        const rangeStartOffset = doc.offsetAt(range.start);
+        const rangeEndOffset = doc.offsetAt(range.end);
+        const affectedStart = doc.positionAt(Math.min(cursorOffset, rangeStartOffset));
+        const affectedEnd = doc.positionAt(Math.max(lineEndOffset, rangeEndOffset));
 
-        if (effectiveRange.start.line !== effectiveRange.end.line || effectiveRange.start.line !== cursorPos.line) {
+        const editedText = doc.getText(new vscode.Range(affectedStart, range.start))
+            + newText
+            + doc.getText(new vscode.Range(range.end, affectedEnd));
+        const unchangedPrefix = doc.getText(new vscode.Range(affectedStart, cursorPos));
+        const unchangedSuffix = doc.getText(new vscode.Range(lineEnd, affectedEnd));
+        const cursorEditTextEnd = editedText.length - unchangedSuffix.length;
+        if (
+            cursorEditTextEnd < unchangedPrefix.length
+            || !editedText.startsWith(unchangedPrefix)
+            || !editedText.endsWith(unchangedSuffix)
+        ) {
             return undefined;
         }
 
-        return this._validateSameLineGhostText(cursorPos, doc, effectiveRange, effectiveText);
+        const cursorEdit = {
+            range: new vscode.Range(cursorPos, lineEnd),
+            newText: editedText.substring(unchangedPrefix.length, cursorEditTextEnd),
+        };
+        return this._validateSameLineGhostText(cursorPos, doc, cursorEdit.range, cursorEdit.newText);
     }
 
     private _tryAdjustNextLineInsertion(
@@ -53,34 +90,13 @@ export class InlineSuggestionResolver {
         if (cursorPos.line + 1 !== range.start.line || range.start.character !== 0) return undefined;
         if (doc.lineAt(cursorPos.line).text.length !== cursorPos.character) return undefined;
 
-        const targetLineFullyConsumed = doc.lineAt(range.end.line).text.length === range.end.character;
-        const noLeftoverAfterInsertion = newText.endsWith('\n') || (newText.includes('\n') && targetLineFullyConsumed);
-        if (!noLeftoverAfterInsertion) return undefined;
-
-        const lineBreak = getTextNormalized(doc, new vscode.Range(cursorPos, range.start));
-        const trimmedNewText = newText.replace(/\r?\n$/, '');
+        const lineBreak = doc.getText(new vscode.Range(cursorPos, range.start));
+        // Pulling an insertion from the next line back to the cursor is
+        // equivalent only when the inserted text ends with the document's
+        // actual line break. In particular, LF is not enough for CRLF files.
+        if (!newText.endsWith(lineBreak)) return undefined;
+        const trimmedNewText = newText.substring(0, newText.length - lineBreak.length);
         return { range: new vscode.Range(cursorPos, cursorPos), newText: lineBreak + trimmedNewText };
-    }
-
-    private _stripCommonLinePrefix(
-        doc: vscode.TextDocument,
-        range: vscode.Range,
-        newText: string,
-    ): { range: vscode.Range; newText: string } {
-        const replacedText = getTextNormalized(doc, range);
-        const maxLen = Math.min(replacedText.length, newText.length);
-        let commonLen = 0;
-        while (commonLen < maxLen && replacedText[commonLen] === newText[commonLen]) {
-            commonLen++;
-        }
-        if (commonLen === 0) return { range, newText };
-
-        const lastNewline = replacedText.lastIndexOf('\n', commonLen - 1);
-        if (lastNewline < 0) return { range, newText };
-
-        const strippedLen = lastNewline + 1;
-        const newStart = doc.positionAt(doc.offsetAt(range.start) + strippedLen);
-        return { range: new vscode.Range(newStart, range.end), newText: newText.substring(strippedLen) };
     }
 
     private _validateSameLineGhostText(
@@ -89,7 +105,7 @@ export class InlineSuggestionResolver {
         range: vscode.Range,
         newText: string,
     ): InlineSuggestionEdit | undefined {
-        const replacedText = getTextNormalized(doc, range);
+        const replacedText = doc.getText(range);
         const cursorOffsetInReplacedText = cursorPos.character - range.start.character;
         if (cursorOffsetInReplacedText < 0) return undefined;
         if (

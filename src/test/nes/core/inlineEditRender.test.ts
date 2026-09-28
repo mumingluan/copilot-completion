@@ -17,9 +17,9 @@ import * as vscode from 'vscode';
  * 通过 handleDidShowCompletionItem 回调验证 VS Code 是否真正显示了 item。
  */
 suite('NES inline edit rendering', () => {
-    async function setupEditor(content: string, cursorLine: number): Promise<vscode.TextEditor> {
+    async function setupEditor(content: string, cursorLine: number, language = 'c'): Promise<vscode.TextEditor> {
         const doc = await vscode.workspace.openTextDocument({
-            language: 'c',
+            language,
             content,
         });
         const editor = await vscode.window.showTextDocument(doc, { preview: false });
@@ -33,6 +33,7 @@ suite('NES inline edit rendering', () => {
     async function runExperiment(
         item: any,
         label: string,
+        language = 'c',
     ): Promise<{ providerCalled: boolean; shown: boolean; shownItemInfo: any }> {
         let providerCalled = false;
         let shown = false;
@@ -58,7 +59,7 @@ suite('NES inline edit rendering', () => {
             },
         };
         const disp = vscode.languages.registerInlineCompletionItemProvider(
-            { scheme: 'untitled', language: 'c' },
+            { scheme: 'untitled', language },
             provider,
         );
 
@@ -83,10 +84,13 @@ suite('NES inline edit rendering', () => {
     test('A: 普通单行 ghost text（无 isInlineEdit）', async function () {
         this.timeout(60000);
         await setupEditor(['int main() {', '    int a = ad_t(10,11);', '    int b = ad_test(10,1);', '}', ''].join('\n'), 1);
+        const editor = vscode.window.activeTextEditor!;
+        const cursor = editor.selection.active;
         const result = await runExperiment(
             {
                 insertText: 'add_test',
-                range: new vscode.Range(1, 16, 1, 19),
+                // A standard inline completion range must contain the cursor.
+                range: new vscode.Range(cursor, cursor),
             },
             'A-ghost-single-line',
         );
@@ -213,6 +217,10 @@ suite('NES inline edit rendering', () => {
 
         // 记录当前值并在测试后恢复
         const cfg = vscode.workspace.getConfiguration('editor.inlineSuggest');
+        if (cfg.get<boolean>('edits.enabled') === undefined) {
+            // VS Code 1.139 (the minimum test runtime) predates this setting.
+            return;
+        }
         const original = cfg.get<boolean>('edits.enabled');
         console.log(`[test] D: original editor.inlineSuggest.edits.enabled = ${original}`);
         await cfg.update('edits.enabled', false, vscode.ConfigurationTarget.Global);
@@ -235,5 +243,20 @@ suite('NES inline edit rendering', () => {
         } finally {
             await cfg.update('edits.enabled', original, vscode.ConfigurationTarget.Global);
         }
+    });
+
+    test('E: YAML mapping key shows a first-token newline as ghost text', async function () {
+        this.timeout(60000);
+        await setupEditor('services:\n  web:', 1, 'yaml');
+        const result = await runExperiment(
+            {
+                insertText: '  web:\n    image: nginx',
+                range: new vscode.Range(1, 0, 1, 6),
+            },
+            'E-yaml-first-newline',
+            'yaml',
+        );
+        assert.ok(result.providerCalled);
+        assert.ok(result.shown, 'YAML first-token newline ghost text was not displayed');
     });
 });

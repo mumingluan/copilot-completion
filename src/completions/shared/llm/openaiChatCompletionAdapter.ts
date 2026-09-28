@@ -1,28 +1,13 @@
 import { ILogService } from '../log/logService';
-import { ILLMAdapter, applyThinkingParams } from './llmAdapter';
+import { ILLMAdapter, applyPromptContext, applyThinkingParams } from './llmAdapter';
 import { LLMRequest, LLMResponse, LLMError, Capabilities, normalizeBody } from './llmRequest';
-import { readSSEStream, splitChunk, SSEChunk } from './sseStream';
+import { iterateSSEStream, readSSEStream } from './sseStream';
 
 export class OpenAIChatCompletionAdapter implements ILLMAdapter {
 
     async *sendStream(request: LLMRequest, signal?: AbortSignal): AsyncGenerator<string, LLMResponse> {
         const url = `${request.baseUrl}/chat/completions`;
-        const bodyObj: Record<string, unknown> = {
-            model: request.model,
-            messages: request.messages || [],
-            max_tokens: request.max_tokens,
-            temperature: request.temperature,
-            presence_penalty: request.presence_penalty,
-            frequency_penalty: request.frequency_penalty,
-            stream: request.stream,
-            stop: request.stop,
-            top_p: request.top_p,
-            n: request.n,
-        };
-
-        applyThinkingParams(bodyObj, request.capabilities, request.family);
-
-        const body = JSON.stringify(bodyObj);
+        const body = JSON.stringify(this._bodyForRequest(request));
 
         const response = await fetch(url, {
             method: 'POST',
@@ -43,39 +28,13 @@ export class OpenAIChatCompletionAdapter implements ILLMAdapter {
         if (ct.includes('text/event-stream')) {
             let text = '';
             let finishReason = 'stop';
-            const stream = response.body!.pipeThrough(new TextDecoderStream());
-            const reader = stream.getReader();
-            let extra = '';
-            try {
-                while (true) {
-                    if (signal?.aborted) {
-                        return { text, finishReason };
-                    }
-                    const { value: rawChunk, done } = await reader.read();
-                    if (done) break;
-                    const chunkStr = rawChunk ?? '';
-                    const [lines, remainder] = splitChunk(extra + chunkStr);
-                    extra = remainder;
-                    for (const line of lines) {
-                        if (line.startsWith(':')) continue;
-                        const data = line.slice('data:'.length).trim();
-                        if (data === '[DONE]') {
-                            return { text, finishReason };
-                        }
-                        try {
-                            const json = JSON.parse(data) as SSEChunk;
-                            const choice = json.choices?.[0];
-                            if (choice?.delta?.content) {
-                                text += choice.delta.content;
-                                yield choice.delta.content;
-                            }
-                            if (choice?.finish_reason) finishReason = choice.finish_reason;
-                        } catch { /* skip malformed JSON */ }
-                    }
+            for await (const json of iterateSSEStream(response, signal)) {
+                const choice = json.choices?.[0];
+                if (choice?.delta?.content) {
+                    text += choice.delta.content;
+                    yield choice.delta.content;
                 }
-            } finally {
-                try { await reader.cancel(); } catch { /* ignore */ }
-                try { await response.body?.cancel(); } catch { /* ignore */ }
+                if (choice?.finish_reason) finishReason = choice.finish_reason;
             }
             return { text, finishReason };
         }
@@ -87,22 +46,7 @@ export class OpenAIChatCompletionAdapter implements ILLMAdapter {
 
     async send(request: LLMRequest, signal?: AbortSignal): Promise<LLMResponse> {
         const url = `${request.baseUrl}/chat/completions`;
-        const bodyObj: Record<string, unknown> = {
-            model: request.model,
-            messages: request.messages || [],
-            max_tokens: request.max_tokens,
-            temperature: request.temperature,
-            presence_penalty: request.presence_penalty,
-            frequency_penalty: request.frequency_penalty,
-            stream: request.stream,
-            stop: request.stop,
-            top_p: request.top_p,
-            n: request.n,
-        };
-
-        applyThinkingParams(bodyObj, request.capabilities,request.family);
-
-        const body = JSON.stringify(bodyObj);
+        const body = JSON.stringify(this._bodyForRequest(request));
 
         const response = await fetch(url, {
             method: 'POST',
@@ -125,7 +69,9 @@ export class OpenAIChatCompletionAdapter implements ILLMAdapter {
             let finishReason = 'stop';
             await readSSEStream(response, signal, json => {
                 const choice = json.choices?.[0];
-                if (choice?.delta?.content) text += choice.delta.content;
+                if (choice?.delta?.content) {
+                    text += choice.delta.content;
+                }
                 if (choice?.finish_reason) finishReason = choice.finish_reason;
             });
             return { text, finishReason };
@@ -133,13 +79,42 @@ export class OpenAIChatCompletionAdapter implements ILLMAdapter {
         return this._parseJSON(await response.text());
     }
 
+    private _bodyForRequest(request: LLMRequest): Record<string, unknown> {
+        const reasoningFamily = request.family === 'openai-o' || request.family === 'openai-gpt5';
+        const reasoningActive = reasoningFamily && request.capabilities?.reasoning_effort !== 'none';
+        const bodyObj: Record<string, unknown> = {
+            model: request.model,
+            messages: request.messages || [],
+            [reasoningFamily ? 'max_completion_tokens' : 'max_tokens']: request.max_tokens,
+            stream: request.stream,
+            stop: request.stop,
+            n: request.n,
+        };
+        if (!reasoningActive) {
+            bodyObj.temperature = request.temperature;
+            bodyObj.top_p = request.top_p;
+            bodyObj.presence_penalty = request.presence_penalty;
+            bodyObj.frequency_penalty = request.frequency_penalty;
+        }
+        applyThinkingParams(bodyObj, request.capabilities, request.family);
+        applyPromptContext(bodyObj, request.context, request.extra);
+        return bodyObj;
+    }
+
     private _parseJSON(raw: string): LLMResponse {
         const json = JSON.parse(raw) as Record<string, unknown>;
         const choices = json.choices as Array<Record<string, unknown>>;
-        const message = choices[0]?.message as Record<string, string> | undefined;
+        const parsedChoices = (choices ?? []).map(choice => {
+            const message = choice.message as Record<string, string> | undefined;
+            return {
+                text: message?.content || '',
+                finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : 'stop',
+            };
+        });
         return {
-            text: message?.content || '',
-            finishReason: choices[0]?.finish_reason as string || 'stop',
+            text: parsedChoices[0]?.text ?? '',
+            finishReason: parsedChoices[0]?.finishReason ?? 'stop',
+            choices: parsedChoices,
         };
     }
 }

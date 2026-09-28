@@ -19,8 +19,11 @@ export const INesConfigProvider = createServiceIdentifier<INesConfigProvider>('I
 
 export interface INesConfigProvider {
     readonly _serviceBrand: undefined;
+    /** Changes whenever settings affecting NES output or requests are updated. */
+    get revision(): number;
     get enabled(): boolean;
     set enabled(value: boolean);
+    get endpointConfigured(): boolean;
     get baseUrl(): string;
     get apiKey(): string;
     get model(): string;
@@ -35,8 +38,11 @@ export interface INesConfigProvider {
     get stream(): boolean;
     get nextCursorPredictionEnabled(): boolean;
     set nextCursorPredictionEnabled(value: boolean);
+    get nextCursorJumpWithoutEdit(): boolean;
     get mimicGhostTextBehavior(): boolean;
     get promptTemplate(): string;
+    readonly eagernessSelection?: string;
+    setEagernessSelection?(value: string): void | Promise<void>;
     onDidChangeEnabled(listener: () => void): vscode.Disposable;
 }
 
@@ -46,13 +52,22 @@ export class VSCodeNesConfigProvider implements INesConfigProvider {
     private readonly _onDidChangeEnabled = new vscode.EventEmitter<void>();
     private readonly _enabledKey = 'nes.enabled';
     private readonly _ncpKey = 'nes.nextCursorPredictionEnabled';
+    private readonly _eagernessKey = 'nes.eagernessSelection';
     private readonly _cache = new Map<string, unknown>();
+    private _revision = 0;
+    private _enabledOverride: boolean | undefined;
+    private _ncpOverride: boolean | undefined;
+    private _enabledWrite = 0;
+    private _ncpWrite = 0;
+    private _enabledPersist = Promise.resolve();
+    private _ncpPersist = Promise.resolve();
 
     constructor(private readonly _context: vscode.ExtensionContext) {
         _context.subscriptions.push(
             vscode.workspace.onDidChangeConfiguration(e => {
                 if (e.affectsConfiguration('cc-completion.nes')) {
                     this._cache.clear();
+                    this._revision++;
                 }
             }),
         );
@@ -67,17 +82,28 @@ export class VSCodeNesConfigProvider implements INesConfigProvider {
         return value;
     }
 
+    get revision(): number {
+        return this._revision;
+    }
+
     get enabled(): boolean {
-        return this._context.workspaceState.get<boolean>(this._enabledKey, true);
+        return this._enabledOverride ?? this._context.workspaceState.get<boolean>(this._enabledKey, true);
     }
 
     set enabled(value: boolean) {
-        this._context.workspaceState.update(this._enabledKey, value);
-        if (!value) {
-            // Disable cursor prediction when NES is turned off
-            this._context.workspaceState.update(this._ncpKey, false);
-        }
+        if (this.enabled === value) return;
+        this._enabledOverride = value;
+        const write = ++this._enabledWrite;
+        this._revision++;
         this._onDidChangeEnabled.fire();
+        this._enabledPersist = this._enabledPersist.catch(() => undefined)
+            .then(() => this._context.workspaceState.update(this._enabledKey, value));
+        void this._enabledPersist.catch(() => {
+            if (this._enabledWrite !== write) return;
+            this._enabledOverride = undefined;
+            this._revision++;
+            this._onDidChangeEnabled.fire();
+        });
     }
 
     get family(): string {
@@ -85,16 +111,46 @@ export class VSCodeNesConfigProvider implements INesConfigProvider {
     }
 
     get nextCursorPredictionEnabled(): boolean {
-        return this._context.workspaceState.get<boolean>(this._ncpKey, false);
+        return this._ncpOverride ?? this._context.workspaceState.get<boolean>(this._ncpKey, false);
+    }
+
+    get nextCursorJumpWithoutEdit(): boolean {
+        return this._cached<boolean>(ConfigKeys.Nes.nextCursorJumpWithoutEdit, false);
+    }
+
+    get eagernessSelection(): string {
+        const value = this._context.workspaceState.get<string>(this._eagernessKey, 'auto');
+        return ['auto', 'low', 'medium', 'high'].includes(value) ? value : 'auto';
+    }
+
+    setEagernessSelection(value: string): void {
+        const normalized = ['auto', 'low', 'medium', 'high'].includes(value) ? value : 'auto';
+        void this._context.workspaceState.update(this._eagernessKey, normalized);
+        this._revision++;
     }
 
     set nextCursorPredictionEnabled(value: boolean) {
-        this._context.workspaceState.update(this._ncpKey, value);
+        if (this.nextCursorPredictionEnabled === value) return;
+        this._ncpOverride = value;
+        const write = ++this._ncpWrite;
+        this._revision++;
         this._onDidChangeEnabled.fire();
+        this._ncpPersist = this._ncpPersist.catch(() => undefined)
+            .then(() => this._context.workspaceState.update(this._ncpKey, value));
+        void this._ncpPersist.catch(() => {
+            if (this._ncpWrite !== write) return;
+            this._ncpOverride = undefined;
+            this._revision++;
+            this._onDidChangeEnabled.fire();
+        });
     }
 
     get baseUrl(): string {
         return this._cached<string>(ConfigKeys.Nes.baseUrl, '');
+    }
+
+    get endpointConfigured(): boolean {
+        return this.baseUrl.trim().length > 0;
     }
 
     get apiKey(): string {
@@ -133,7 +189,7 @@ export class VSCodeNesConfigProvider implements INesConfigProvider {
     }
 
     get suffixOverlapThreshold(): number {
-        return this._cached<number>(ConfigKeys.Nes.suffixOverlapThreshold, 0.95);
+        return this._cached<number>(ConfigKeys.Nes.suffixOverlapThreshold, 1);
     }
 
     get suffixOverlapType(): 'low' | 'high' {
@@ -141,11 +197,11 @@ export class VSCodeNesConfigProvider implements INesConfigProvider {
     }
 
     get presencePenalty(): number {
-        return this._cached<number>(ConfigKeys.Nes.presencePenalty, 1);
+        return this._cached<number>(ConfigKeys.Nes.presencePenalty, 0);
     }
 
     get frequencyPenalty(): number {
-        return this._cached<number>(ConfigKeys.Nes.frequencyPenalty, 0.2);
+        return this._cached<number>(ConfigKeys.Nes.frequencyPenalty, 0);
     }
 
     get stream(): boolean {
@@ -159,7 +215,7 @@ export class VSCodeNesConfigProvider implements INesConfigProvider {
     get promptTemplate(): string {
         return this._cached<string>(
             ConfigKeys.Nes.promptTemplate,
-            '<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n',
+            '<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n\n',
         );
     }
 

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 let _wasmDirPath: string | undefined;
@@ -9,11 +10,25 @@ export function setWasmDirPath(extensionFsPath: string): void {
 }
 
 export function locateFile(filename: string): string {
-    if (_wasmDirPath) {
-        return path.resolve(_wasmDirPath, filename);
+    const candidates = _wasmDirPath
+        ? [
+            path.resolve(_wasmDirPath, filename),
+            // Tests often pass the repository root while webpack builds use
+            // the extension directory directly.
+            path.resolve(_wasmDirPath, '..', 'dist', 'wasm', filename),
+        ]
+        : [
+            // Packaged/bundled extension: __dirname is dist/.
+            path.resolve(__dirname, 'wasm', filename),
+            // Compiled tests: __dirname is out/.../treeSitter.
+            path.resolve(__dirname, '../../../../..', 'dist', 'wasm', filename),
+            path.resolve(process.cwd(), 'dist', 'wasm', filename),
+        ];
+    const existing = candidates.find(candidate => existsSync(candidate));
+    if (existing) {
+        return existing;
     }
-    // Fallback: resolve relative to __dirname (webpack bundle in dist/)
-    return path.resolve(__dirname, 'wasm', filename);
+    return candidates[0];
 }
 
 export async function readFile(filename: string): Promise<Uint8Array> {

@@ -20,9 +20,9 @@ export class EditWindowResolver {
         public maxMergeConflictLines: number = 50,
     ) {}
 
-    resolve(lines: LineSource, cursorLine: number): OffsetRange {
+    resolve(lines: LineSource, cursorLine: number, nLinesBelow = this.nLinesBelow): OffsetRange {
         let start = Math.max(0, cursorLine - this.nLinesAbove);
-        let endExcl = Math.min(lines.lineCount, cursorLine + this.nLinesBelow + 1);
+        let endExcl = Math.min(lines.lineCount, cursorLine + nLinesBelow + 1);
 
         const conflictRange = findMergeConflictMarkersRange(
             lines,

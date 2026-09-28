@@ -25,8 +25,10 @@ export interface NextEditResult {
     edit: string;
     /** Snapshot of the edit window original text before edits */
     documentBeforeEdits: string;
-    /** Complete edit window text after modification (for inline suggestion resolution) */
+    /** New lines of the first model patch, used to correlate streamed continuations. */
     fullEditText: string;
+    /** The line window used to produce the complete model response. */
+    editWindow?: LineRange0Based;
     /** Per-edit detail: precise range and replacement text */
     edits: Array<{ replaceRange: vscode.Range; newText: string }>;
     /** Predicted cursor position after accepting the edit */
@@ -44,6 +46,8 @@ export interface NextEditResult {
     jumpToPosition?: vscode.Position;
     /** Cursor prediction metadata (for predict-retry flow) */
     cursorPrediction?: CursorJumpPrediction;
+    /** Optional command supplied by a diagnostic quick fix after its edit is applied. */
+    action?: vscode.Command;
 }
 
 export type CursorJumpPrediction =
@@ -76,12 +80,14 @@ export class NesCompletionInfo {
         public readonly documentId: string,
         public readonly document: vscode.TextDocument,
         public readonly requestUuid: string,
-        public readonly source: 'provider' = 'provider',
+        public readonly source: 'provider' | 'diagnostic' = 'provider',
     ) {}
 }
 
 /** NES-specific InlineCompletionItem properties recognized by VS Code at runtime. */
 export interface NesCompletionItem extends vscode.InlineCompletionItem {
+    /** Target document for cross-file edits and cursor jumps. */
+    uri?: vscode.Uri;
     isInlineEdit?: boolean;
     isInlineCompletion?: boolean;
     showInlineEditMenu?: boolean;
@@ -99,6 +105,8 @@ export interface NesCompletionItem extends vscode.InlineCompletionItem {
     };
     info?: NesCompletionInfo;
     wasShown?: boolean;
+    /** Most recent time VS Code displayed this suggestion. */
+    shownAt?: number;
     isEditInAnotherDocument?: boolean;
     /** VS Code 1.132+: default action shown with the suggestion (replaces command) */
     action?: vscode.Command;

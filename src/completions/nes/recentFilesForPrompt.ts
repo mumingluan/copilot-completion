@@ -16,6 +16,7 @@ export interface AppendNeighborFileSnippetsResult {
     readonly nComputed: number;
     readonly nIncluded: number;
     readonly includedIndices: readonly number[];
+    readonly tokensConsumed: number;
 }
 
 export function getRecentCodeSnippets(
@@ -322,7 +323,7 @@ function appendLanguageContextSnippets(
 
 /**
  * Append Completions-style neighbor-file snippets (Jaccard-ranked) to the snippets array.
- * Selects greedily from highest score downward, skipping duplicates and budget overruns.
+ * Selects greedily from highest score downward, skipping repeated content and budget overruns.
  * Selected snippets are appended in score-ascending order.
  */
 function appendNeighborFileSnippets(
@@ -333,39 +334,49 @@ function appendNeighborFileSnippets(
     computeTokens: (code: string) => number,
     includeLineNumbers: IncludeLineNumbersOption,
 ): AppendNeighborFileSnippetsResult {
-    const selected: { snippet: INeighborFileSnippet; originalIndex: number }[] = [];
-    for (let i = neighborSnippets.length - 1; i >= 0; i--) {
+    const selected: { formatted: string; originalIndex: number }[] = [];
+    const representedSnippets = [...snippets];
+    // The caller orders snippets by relevance. Spend the budget on the most
+    // relevant semantic/lexical context first so low-ranked files cannot crowd
+    // out definitions and references.
+    for (let i = 0; i < neighborSnippets.length; i++) {
         const neighborSnippet = neighborSnippets[i];
         const documentId = DocumentId.create(neighborSnippet.uri);
-        if (docsInPrompt.has(documentId)) {
+        // A recently viewed file can contain a different, distant definition.
+        // Deduplicate its actual source slice instead of dropping the entire file.
+        const formatted = formatCodeSnippet(documentId, neighborSnippet.snippet.split(/\r?\n/), {
+            truncated: false,
+            includeLineNumbers,
+            startLineOffset: neighborSnippet.lineRange.startLine,
+        });
+        const fileHeader = `code_snippet_file_path: ${toUniquePath(documentId, undefined)}`;
+        const sourceSlice = `\n${neighborSnippet.snippet.trimEnd()}\n`;
+        if (representedSnippets.some(existing => existing === formatted
+            || (includeLineNumbers === IncludeLineNumbersOption.None
+                && existing.includes(fileHeader)
+                && existing.includes(sourceSlice)))) {
             continue;
         }
-        const potentialBudget = tokenBudget - computeTokens(neighborSnippet.snippet);
+        const potentialBudget = tokenBudget - computeTokens(formatted);
         if (potentialBudget < 0) {
             continue;
         }
-        selected.push({ snippet: neighborSnippet, originalIndex: i });
+        selected.push({ formatted, originalIndex: i });
+        representedSnippets.push(formatted);
         docsInPrompt.add(documentId);
         tokenBudget = potentialBudget;
     }
-    // Reverse so highest-scoring snippet is appended last (closest to current file)
+    // Keep the highest-value definition nearest the current file, like the
+    // native neighbor-file prompt layout.
     for (let i = selected.length - 1; i >= 0; i--) {
-        const neighborSnippet = selected[i].snippet;
-        snippets.push(formatCodeSnippet(
-            DocumentId.create(neighborSnippet.uri),
-            neighborSnippet.snippet.split(/\r?\n/),
-            {
-                truncated: false,
-                includeLineNumbers,
-                startLineOffset: neighborSnippet.lineRange.startLine,
-            },
-        ));
+        snippets.push(selected[i].formatted);
     }
     const includedIndices = selected.map(s => s.originalIndex).sort((a, b) => a - b);
     return {
         nComputed: neighborSnippets.length,
         nIncluded: selected.length,
         includedIndices,
+        tokensConsumed: selected.reduce((sum, item) => sum + computeTokens(item.formatted), 0),
     };
 }
 
@@ -573,7 +584,7 @@ function buildCodeSnippetsGreedy(
         }
     }
 
-    return { snippets: result.snippets, docsInPrompt: result.docsInPrompt };
+    return { snippets: result.snippets.reverse(), docsInPrompt: result.docsInPrompt };
 }
 
 /**
@@ -643,5 +654,5 @@ function buildCodeSnippetsWithProportionalBudget(
         }
     }
 
-    return { snippets: result.snippets, docsInPrompt: result.docsInPrompt };
+    return { snippets: result.snippets.reverse(), docsInPrompt: result.docsInPrompt };
 }

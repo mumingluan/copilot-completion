@@ -14,6 +14,8 @@ interface BlockParser {
     getNodeStart: (text: string, offset: number) => Promise<number | undefined>;
 }
 
+const incompleteBraceFallbackLanguages = new Set(['cpp', 'csharp', 'java', 'php']);
+
 abstract class BaseBlockParser implements BlockParser {
     abstract isEmptyBlockStart(text: string, offset: number): Promise<boolean>;
 
@@ -106,7 +108,10 @@ abstract class BaseBlockParser implements BlockParser {
 
     async isBlockBodyFinished(prefix: string, completion: string, offset: number): Promise<number | undefined> {
         const solution = (prefix + completion).trimEnd();
-        const endIndex = await this.getNextBlockAtPosition(solution, offset, block => block.endIndex);
+        // The boundary belongs to the source before the generated text. An
+        // inclusive lookup at offset can select the model's first nested
+        // statement instead of the block containing the cursor.
+        const endIndex = await this.getNextBlockAtPosition(solution, Math.max(0, offset - 1), block => block.endIndex);
         if (endIndex === undefined) {
             return;
         }
@@ -479,7 +484,13 @@ class TreeSitterBasedBlockParser extends BaseBlockParser {
                 }
             }
 
-            return false;
+            // An unfinished C-family body can be represented as one ERROR
+            // node (not a method/block pair), notably by the C# grammar.
+            // The opening brace is still a distinct syntax token, so it is
+            // safe to request a block here; braces in comments or strings
+            // have different leaf node types.
+            return this.curlyBraceLanguage && incompleteBraceFallbackLanguages.has(this.languageId)
+                && nodeAtPos.type === '{';
         } finally {
             tree.delete();
         }
@@ -714,7 +725,20 @@ const wasmLanguageToBlockParser: { [languageId in WASMLanguage]: BlockParser } =
     ),
     'c-sharp': new TreeSitterBasedBlockParser(
         'csharp',
-        {},
+        {
+            method_declaration: 'block',
+            constructor_declaration: 'block',
+            destructor_declaration: 'block',
+            if_statement: 'block',
+            for_statement: 'block',
+            foreach_statement: 'block',
+            while_statement: 'block',
+            do_statement: 'block',
+            try_statement: 'block',
+            catch_clause: 'block',
+            finally_clause: 'block',
+            switch_statement: 'block',
+        },
         new Map(),
         [],
         'block',
@@ -723,7 +747,19 @@ const wasmLanguageToBlockParser: { [languageId in WASMLanguage]: BlockParser } =
     ),
     java: new TreeSitterBasedBlockParser(
         'java',
-        {},
+        {
+            method_declaration: 'block',
+            constructor_declaration: 'constructor_body',
+            if_statement: 'block',
+            for_statement: 'block',
+            enhanced_for_statement: 'block',
+            while_statement: 'block',
+            do_statement: 'block',
+            try_statement: 'block',
+            catch_clause: 'block',
+            finally_clause: 'block',
+            switch_expression: 'switch_block',
+        },
         new Map(),
         [],
         'block',
@@ -732,19 +768,39 @@ const wasmLanguageToBlockParser: { [languageId in WASMLanguage]: BlockParser } =
     ),
     php: new TreeSitterBasedBlockParser(
         'php',
-        {},
+        {
+            function_definition: 'compound_statement',
+            method_declaration: 'compound_statement',
+            if_statement: 'compound_statement',
+            for_statement: 'compound_statement',
+            foreach_statement: 'compound_statement',
+            while_statement: 'compound_statement',
+            try_statement: 'compound_statement',
+        },
         new Map(),
         [],
-        'block',
+        'compound_statement',
         null,
         true
     ),
     cpp: new TreeSitterBasedBlockParser(
         'cpp',
-        {},
+        {
+            function_definition: 'compound_statement',
+            if_statement: 'compound_statement',
+            for_statement: 'compound_statement',
+            while_statement: 'compound_statement',
+            do_statement: 'compound_statement',
+            switch_statement: 'compound_statement',
+            try_statement: 'compound_statement',
+            catch_clause: 'compound_statement',
+            class_specifier: 'field_declaration_list',
+            struct_specifier: 'field_declaration_list',
+            namespace_definition: 'declaration_list',
+        },
         new Map(),
         [],
-        'block',
+        'compound_statement',
         null,
         true
     ),

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
-import { LintOptions, LintOptionShowCode, DocumentId, IXtabHistoryEntry } from './stubs/types';
+import { LintOptions, LintOptionShowCode, LintOptionWarning, IXtabHistoryEntry } from './stubs/types';
 import { CurrentDocument } from './xtabCurrentDocument';
-import { Position } from './stubs/position';
 import { PromptTags } from './tags';
 
 export class LintErrors {
@@ -12,13 +11,27 @@ export class LintErrors {
     ) { }
 
     getFormattedLintErrors(options: LintOptions): string {
-        const diagnostics = this._getFilteredDiagnostics(options);
-        if (diagnostics.length === 0) {
-            return '';
+        const diagnostics = this._getFilteredDiagnostics(this._documentUri, options, true);
+        if (options.nRecentFiles > 0 && this._xtabHistory) {
+            const seen = new Set([this._documentUri.toString()]);
+            // NesHistoryTracker stores newest entries first. Preserve that
+            // order so a limited diagnostics budget favors the latest file.
+            for (const entry of this._xtabHistory) {
+                const uri = entry.docId.toUri();
+                const key = uri.toString();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                diagnostics.push(...this._getFilteredDiagnostics(uri, options, false));
+                if (seen.size - 1 >= options.nRecentFiles) break;
+            }
         }
-
-        const formatted = diagnostics.map(d => formatSingleDiagnostic(d, this._document.lines, options)).join('\n');
-        return `${PromptTags.LINTER.start}\n${formatted}\n${PromptTags.LINTER.end}`;
+        diagnostics.splice(options.maxLints);
+        const formatted = diagnostics.map(d => formatSingleDiagnostic(
+            d, this._document.lines,
+            d.isCurrentFile ? options : { ...options, showCode: LintOptionShowCode.NO },
+        )).join('\n');
+        const tag = PromptTags.createLintTag(options.tagName);
+        return `${tag.start}\n${formatted}\n${tag.end}`;
     }
 
     getData(): string {
@@ -26,39 +39,25 @@ export class LintErrors {
     }
 
     /**
-     * Collects diagnostics for the current document, filters by distance/severity/limit,
-     * and excludes import/include-related diagnostics.
+     * Collects diagnostics for the current document and filters by distance,
+     * severity, and prompt limit.
      */
-    private _getFilteredDiagnostics(options: LintOptions): DiagnosticInfo[] {
-        const allDiagnostics = vscode.languages.getDiagnostics(this._documentUri);
+    private _getFilteredDiagnostics(uri: vscode.Uri, options: LintOptions, isCurrentFile: boolean): DiagnosticInfo[] {
+        const allDiagnostics = vscode.languages.getDiagnostics(uri);
 
         const relevant: DiagnosticInfo[] = [];
         for (const d of allDiagnostics) {
-            if (this._isImportOrIncludeDiagnostic(d)) {
-                continue;
-            }
-
             const startLine = d.range.start.line; // 0-based
             const cursorLine = this._document.cursorPosition.lineNumber - 1; // convert 1-based to 0-based
             const lineDistance = Math.abs(startLine - cursorLine);
 
-            if (lineDistance > options.maxLineDistance) {
+            if (isCurrentFile && lineDistance > options.maxLineDistance) {
                 continue;
             }
 
-            const severity = d.severity === vscode.DiagnosticSeverity.Error || d.severity === vscode.DiagnosticSeverity.Warning
-                ? (d.severity === vscode.DiagnosticSeverity.Error ? 'error' as const : 'warning' as const)
-                : undefined;
+            const severity = d.severity === vscode.DiagnosticSeverity.Error ? 'error' as const : 'warning' as const;
 
-            if (severity === undefined) {
-                continue;
-            }
-
-            // Filter by severity option
-            if (options.warnings === 'NO' && severity === 'warning') {
-                continue;
-            }
-
+            const code = typeof d.code === 'object' ? d.code.value : d.code;
             relevant.push({
                 severity,
                 message: d.message,
@@ -66,59 +65,28 @@ export class LintErrors {
                 column: d.range.start.character,
                 endLine: d.range.end.line,
                 endColumn: d.range.end.character,
-                code: typeof d.code === 'string' ? d.code : (typeof d.code === 'number' ? String(d.code) : undefined),
+                code: code === undefined ? undefined : String(code),
                 source: d.source,
                 lineDistance,
+                columnDistance: Math.abs(d.range.start.character - (this._document.cursorPosition.column - 1)),
+                isCurrentFile,
             });
         }
 
-        // Sort by line distance (closest to cursor first)
-        relevant.sort((a, b) => a.lineDistance - b.lineDistance);
-
-        return relevant.slice(0, options.maxLints);
+        if (isCurrentFile) {
+            relevant.sort((a, b) => a.lineDistance - b.lineDistance || a.columnDistance - b.columnDistance);
+        } else {
+            relevant.sort((a, b) => a.line - b.line);
+        }
+        const errors = relevant.filter(d => d.severity === 'error');
+        const severityFiltered = options.warnings === LintOptionWarning.NO
+            ? errors
+            : options.warnings === LintOptionWarning.YES_IF_NO_ERRORS && errors.length > 0
+                ? errors
+                : relevant;
+        return severityFiltered.slice(0, options.maxLints);
     }
 
-    /**
-     * Returns true if the diagnostic is related to import/include/package resolution.
-     * These are noisy diagnostics that don't help the NES model make better edits.
-     */
-    private _isImportOrIncludeDiagnostic(d: vscode.Diagnostic): boolean {
-        const msg = d.message.toLowerCase();
-        const source = (d.source ?? '').toLowerCase();
-
-        // Import-related patterns
-        if (/\bcannot find module\b/.test(msg)) return true;
-        if (/\bcould not find\b.*\bmodule\b/.test(msg)) return true;
-        if (/\bunable to resolve\b.*\bmodule\b/.test(msg)) return true;
-        if (/\bmodule.*not found\b/.test(msg)) return true;
-        if (/\bmodule.*not resolved\b/.test(msg)) return true;
-        if (/\bno declaration found\b/.test(msg)) return true; // .d.ts missing for import
-        if (/\bcould not find declaration\b/.test(msg)) return true;
-        if (/\bimplicitly has an 'any' type\b/.test(msg) && /\bimport\b/.test(msg)) return true;
-
-        // Include/require patterns
-        if (/\binclude\b.*\bnot found\b/.test(msg)) return true;
-        if (/\bcannot open include file\b/.test(msg)) return true;
-        if (/\bcannot open source file\b/.test(msg)) return true; // C/C++ #include
-        if (/\bfile not found\b/.test(msg) && /\binclude\b/.test(msg)) return true;
-        if (/\brequire\b.*\bnot found\b/.test(msg)) return true; // Lua require
-
-        // Package/dependency resolution
-        if (/\bcannot find package\b/.test(msg)) return true;
-        if (/\bpackage.*not found\b/.test(msg)) return true;
-        if (/\bcould not resolve\b/.test(msg)) return true;
-        if (/\bunresolved\b.*\bimport\b/.test(msg)) return true;
-
-        // Rust use/import
-        if (/\bunresolved import\b/.test(msg)) return true;
-        if (/\bcould not find\b.*\bin crate\b/.test(msg)) return true;
-
-        // Source-level checks
-        if (source === 'ts' && /cannot find module/.test(msg)) return true;
-        if (source === 'rustc' && /unresolved import/.test(msg)) return true;
-
-        return false;
-    }
 }
 
 interface DiagnosticInfo {
@@ -131,6 +99,8 @@ interface DiagnosticInfo {
     code: string | undefined;
     source: string | undefined;
     lineDistance: number;
+    columnDistance: number;
+    isCurrentFile: boolean;
 }
 
 function formatSingleDiagnostic(

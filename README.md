@@ -1,176 +1,96 @@
-# Copilot Completion
+# Copilot Completions
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+An independent VS Code extension for model-powered inline code completion and predictive edits. It provides Ghost Text (FIM-style inline completions), Next Edit Suggestions (NES), and next-cursor predictions in the editor.
 
-Code completion VS Code extension powered by LLMs — supporting both **GHOST** FIM inline completions and **NES** (Next Edit Suggestion) predictive edits.
+[简体中文](README.zh-CN.md)
 
-[中文文档](README.zh-CN.md)
+> This project is not affiliated with, endorsed by, or an official product of GitHub or Microsoft. “Copilot” in the project history refers to the upstream source project and the upstream APIs this extension builds on.
 
-## Enable NES
+> For an improved experience that more closely matches the original GitHub Copilot, follow [Localalot](https://github.com/mumingluan/localalot).
 
->[!note]
-> Because latest VS Code has tightened its permission controls, the `NES` feature APIs are restricted to internal extensions only; hence, **you must manually enable the [Proposals API](https://code.visualstudio.com/api/advanced-topics/using-proposed-api)**.
+## Upstream and this fork
 
-1. `ctrl + shift + p` and type `Preferences: Configure Runtime Arguments`
-2. Add the following line to the `argv.json` file:
-    ```json
-    {
-        "enable-proposed-api": ["young-triangle.copilot-completions"]
-    }
-    ```
-3. Restart VS Code to apply the changes.
+This repository is a fork of [`spite-triangle/copilot-completion`](https://github.com/spite-triangle/copilot-completion). The upstream project provides the starting VS Code extension, Ghost inline completions, NES edits, and their editor integration. This fork retains that project lineage and license while developing completion behavior and model compatibility independently.
+
+Compared with the upstream baseline, this fork focuses on:
+
+- More reliable Ghost completion flow: request cancellation and reuse, cache scoping, speculative prefetch, indentation-aware trimming, duplicate suffix handling, and multiline decisions for YAML/JSON and other structured files.
+- Richer completion context: recent edits, related files, language-server symbols and diagnostics, import-aware lookup, and lexical fallbacks when language services are unavailable.
+- More robust NES behavior: edit-window resolution, streaming and partial edits, multi-edit acceptance, diagnostics fixes, cache rebasing, response filtering, and next-cursor prediction across files.
+- More local model choices: OpenAI-compatible Completions, FIM Completions, Chat Completions, and Responses endpoints, plus Anthropic Messages endpoints where supported by the selected feature.
+- Focused editor UX for inline completion, NES, prediction cursor, and the status-bar menu. This fork does not add Agent, chat, inline-chat, or sidebar conversation features.
+
+The fork may diverge from upstream over time. See the [upstream repository](https://github.com/spite-triangle/copilot-completion) for its current implementation and history. This fork is not the Microsoft/GitHub Copilot extension and does not include its hosted Copilot service.
 
 ## Features
 
-### GHOST — FIM (Fill in the Middle) Inline Completion
+### Ghost Text inline completions
 
-- Ghost-text inline suggestions displayed directly in the editor as you type
-- Prefix/suffix context sent to the model via configurable FIM prompt template
-- **Multi-line detection chain**: ML model scoring, empty block detection, suffix presence, file size guard, and newline detection
-- Tree-sitter powered block parsing for intelligent completion boundaries
-- Suffix overlap trimming with configurable similarity thresholds
-- Caching and debouncing for responsive UX
+- Inline suggestions while typing, including single-line and multiline completions.
+- Prefix, suffix, recent-edit, neighboring-file, and semantic context for the model prompt.
+- Language-aware multiline handling and block parsing, including structured formats such as YAML and JSON.
+- Streaming, cancellation, request reuse, caching, suffix trimming, and indentation-aware filtering.
+- Works alongside IntelliSense, with settings for pausing suggestions or previewing the selected completion.
 
-### NES — Next Edit Suggestion
+### Next Edit Suggestions
 
-- Predicts the developer's **next edit** anywhere in the current file (not just at the cursor)
-- **Edit window** resolution around the cursor with merge conflict marker awareness
-- **Cursor jump prediction**: anticipates where the developer will navigate next. **This feature is available, but predication will lead to extra twice request.**
-- **Edit intent classification**: high / medium / low aggressiveness filtering
-- Response post-processing pipeline: boundary marker parsing → cursor tag stripping → line-level diff → suffix overlap trimming
-- Multiple response format handlers: edit-window, code-block, edit-intent, unified XML, custom diff-patch
+- Proposes edits away from the current cursor, shown through VS Code's inline edit experience.
+- Preserves sequential edits from a response and supports diagnostic fixes.
+- Uses edit history, related files, language-server context, and configurable filtering.
+- Predicts a next cursor location in the current or another workspace file.
 
-### Supported LLM Backends
+## Requirements
 
-| Mode | API Endpoint | 
-|---|---|
-| NES | `/chat/completions, /completions` |
-| GHOST | `/completions, /fim/completions` |
-
-> [!tip]
-> - `Qwen2.5 coder` is good performance for `GHOST`, which can run in local and provide better suggestion.
-> - `Qwen3.5 9B MIT` performs well for `GHOST` and `NES` individually. 
-> - `Qwen3.6 35B A3B` and `Qwen3.6 27B` are good for `NES`.
-
-## Configuration
-
-All settings are under the `cc-completion` prefix.
-
-### wordPattern
-
-Through `cc-completion.wordPatterns`, you can configure the wordPatterns for a language, which affects the word recognition behavior of `ctrl + rightarrow` in `GHOST`.
-- wordPattern is a regular expression used to match word boundaries — that is, it controls the boundaries for the `ctrl + rightarrow` word recognition feature.
-- To add flags to wordPattern, use the `/.../ug` format. **Usually, do not add flags unless the language requires global matching.**
-- Press `ctrl + shift + p`, type `change language mode` to check the current language id, and **use `*` to represent replacing all languages**.
-- Configuring `cc-completion.wordPatterns` will override the language's default wordPattern, affecting advanced features such as code completion and suggestions. **Please modify the default configuration with caution**.
-
-The official built-in default configuration is as follows:
+- VS Code matching the version declared by [`package.json`](package.json).
+- A completion model server and its endpoint URL, model name, and optional API key.
+- To use NES, enable the proposed API for this extension in VS Code's `argv.json`, then restart VS Code:
 
 ```json
 {
-    "cc-completion.wordPatterns":{
-        "c": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
-        "cpp": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
-        "cuda-cpp": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
-        "css": "(#?-?\\d*\\.\\d\\w*%?)|(::?[\\w-]*(?=[^,{;]*[,{]))|(([@#!])? [\\w-?]+%?|[@#!.])",
-        "handlebars": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\$\\^\\&\\*\\(\\)\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\s]+)",
-        "html": "(-?\\d*\\.\\d\\w*)|([^\\`\\~\\!\\@\\$\\^\\&\\*\\(\\)\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\s]+)",
-        "less": "(#?-?\\d*\\.\\d\\w*%?)|(::?[\\w-]*(?=[^,{;]*[,{]))|(([@#!])? [\\w-?]+%?|[@#!.])",
-        "markdown": "/(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})(((\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})|[_])?(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark}))*/ug",
-        "php": "(-?\\d*\\.\\d\\w*)|([^\\-\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
-        "prompt": "/(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})(((\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})|[_])?(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark}))*/ug",
-        "instructions": "/(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})(((\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})|[_])?(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark}))*/ug",
-        "chatagent": "/(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})(((\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})|[_])?(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark}))*/ug",
-        "skill": "/(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})(((\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark})|[_])?(\\p{Alphabetic}|\\p{Number}|\\p{Nonspacing_Mark}))*/ug",
-        "restructuredtext": "[\\w-]*\\w[\\w-]*",
-        "scss": "(#?-?\\d*\\.\\d\\w*%?)|(::?[\\w-]*(?=[^,{;]*[,{]))|(([@$#!.])? [\\w-?]+%?|[@#!$.])",
-        "typescript": "(-?\\d*\\.\\d\\w*)|([^\\`\\@\\~\\!\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
-        "typescriptreact": "(-?\\d*\\.\\d\\w*)|([^\\`\\@\\~\\!\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
-        "jsonc": "(-?\\d*\\.\\d\\w*)|([^\\`\\@\\~\\!\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)",
-        "json": "(-?\\d*\\.\\d\\w*)|([^\\`\\@\\~\\!\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)"
-    }
+  "enable-proposed-api": ["young-triangle.copilot-completions"]
 }
 ```
 
-**example**: Implement character-by-character confirmation for Chinese
+Open the Command Palette and run **Preferences: Configure Runtime Arguments** to locate `argv.json`. VS Code restricts the proposed inline-edit APIs; without this setting, NES may not be available. Ghost inline completions use the stable inline completions API.
 
-```json
-{
-    "cc-completion.wordPatterns": {
-        "*": "(-?\\d*\\.\\d\\w*)|(-?[\u4e00-\u9fa5])|([^\\；\\，\\、\\’\\‘\\：\u4e00-\u9fa5\\“\\”\\【\\】\\？\\`\\~\\!\\@\\#\\%\\^\\&\\*\\(\\)\\-\\=\\+\\[\\{\\]\\}\\\\\\|\\;\\:\\'\\\"\\,\\.\\<\\>\\/\\?\\s]+)"
-    },
-}
-```
+## Configure a model
 
-### GHOST Settings
+Set the model settings under `cc-completion.ghost` and `cc-completion.nes` in VS Code Settings. Configure the base URL without the endpoint path; the extension appends the selected endpoint.
 
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `ghost.baseUrl` | `string` | `""` | API base URL |
-| `ghost.apiKey` | `string` | `""` | API key |
-| `ghost.model` | `string` | `"gpt-4o"` | Model name |
-| `ghost.stops` | `string[]` | `[]` | Stop sequences for response generation |
-| `ghost.endpoint` | `"fim/completions"`,`"completions"`  | `"completions"` | LLM API endpoint |
-| `ghost.promptTemplate` | `string` | `<\|fim_prefix\|>{prefix}<\|fim_suffix\|>{suffix}<\|fim_middle\|>` | FIM prompt template |
-| `ghost.capabilities.limits.max_output_tokens` | `number` | `512` | Max output tokens (hard cap) |
-| `ghost.capabilities.limits.max_context_window_tokens` | `number` | `128000` | Max context window tokens |
-| `ghost.capabilities.limits.delay` | `number` | `150` | Minimum delay (ms) between network requests |
-| `ghost.suffixOverlapThreshold` | `number` | `0.6` | Suffix overlap similarity threshold |
-| `ghost.suffixOverlapType` | `"low"` \| `"high"` | `"low"` | Overlap detection mode |
-| `ghost.presencePenalty` | `number` | `1` | Presence penalty (-2 to 2) |
-| `ghost.frequencyPenalty` | `number` | `0.2` | Frequency penalty (-2 to 2) |
-| `ghost.stream` | `boolean` | `true` | Enable SSE streaming |
-
-### NES Settings
-
-| Key | Type | Default | Description |
-|---|---|---|---|
-| `nes.baseUrl` | `string` | `""` | API base URL |
-| `nes.apiKey` | `string` | `""` | API key |
-| `nes.model` | `string` | `"gpt-4o"` | Model name |
-| `nes.endpoint` | `"chat/completions"`,`"completions"`  | `"chat/completions"` | LLM API endpoint |
-| `nes.family` | `"standard"` \| `"openai-o"` \| `"openai-gpt5"` \| `"deepseek"` \| `"qwen"` | `"standard"` | Model family for NES thinking mode |
-| `nes.capabilities.limits.max_output_tokens` | `number` | `8192` | Max output tokens (hard cap) |
-| `nes.capabilities.limits.max_context_window_tokens` | `number` | `128000` | Max context window tokens |
-| `nes.capabilities.supports.thinking` | `boolean` | `false` | Model supports thinking/reasoning |
-| `nes.capabilities.supports.reasoning_effort` | `"minimal"` \| `"low"` \| `"medium"` \| `"high"` \| `"xhigh"` | — | Supported reasoning effort level |
-| `nes.suffixOverlapThreshold` | `number` | `0.9` | Suffix overlap similarity threshold |
-| `nes.suffixOverlapType` | `"low"` \| `"high"` | `"high"` | Overlap detection mode |
-| `nes.presencePenalty` | `number` | `1` | Presence penalty (-2 to 2) |
-| `nes.frequencyPenalty` | `number` | `0.2` | Frequency penalty (-2 to 2) |
-| `nes.stream` | `boolean` | `true` | Enable SSE streaming |
-| `nes.promptTemplate` | `string` | `<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user}<|im_end|>\n<|im_start|>assistant\n` | `/v1/completions` prompt template |
-
-
-## Commands
-
-| Command | Description |
+| Feature | Supported endpoint paths |
 |---|---|
-| `CC Completion: Toggle Panel` | Toggle the status bar panel visibility |
+| Ghost | `/completions`, `/fim/completions`, `/chat/completions`, `/responses`, `/messages` |
+| NES and cursor prediction | `/chat/completions`, `/completions`, `/responses`, `/messages` |
 
-## Architecture
+Endpoint compatibility depends on the model server. For example, choose `responses` for an OpenAI Responses API server and `messages` for an Anthropic Messages API server. Streaming can be turned off for endpoints that only return complete responses. The Ghost prompt template is used for completion endpoints; chat-style endpoints receive the prefix and suffix as code insertion context.
 
+Useful settings include:
+
+- `cc-completion.ghost.baseUrl`, `cc-completion.ghost.apiKey`, `cc-completion.ghost.model`, and `cc-completion.ghost.endpoint`.
+- `cc-completion.nes.baseUrl`, `cc-completion.nes.apiKey`, `cc-completion.nes.model`, and `cc-completion.nes.endpoint`.
+- `cc-completion.ghost.capabilities.limits.max_context_window_tokens` and `cc-completion.nes.capabilities.limits.max_context_window_tokens` to match each model's context capacity.
+- `cc-completion.ghost.semanticContextEnabled`, `cc-completion.nes.semanticContextEnabled`, and `cc-completion.nes.neighborFilesEnabled` to control additional prompt context.
+- `cc-completion.enable` to enable or disable suggestions by language, and `cc-completion.exclude` to exclude files by glob.
+
+All available settings and defaults are declared in [`package.json`](package.json).
+
+## Build and test
+
+```sh
+npm install
+npm run compile
+npm test
 ```
-src/
-├── completions/
-│   ├── ghost/          # GHOST: FIM inline completion
-│   │   └── multiline/  # Multi-line detection chain + tree-sitter
-│   ├── nes/            # NES: Next Edit Suggestion
-│   │   ├── core/       # Workflow, history, edit-window, result assembly
-│   │   ├── response/   # Response pipeline, differ, filter chain
-│   │   └── stubs/      # Data type stubs
-│   └── shared/         # Shared LLM adapters and log service
-├── common/             # Shared utilities (arrays, result type, suffix trim)
-├── config/             # Configuration providers (GHOST + NES)
-├── di/                 # Dependency injection container
-├── test/               # Test suites
-└── ui/                 # Status bar panel
-```
 
-## References
+To run the extension from source, use the repository's VS Code launch configuration. To create a VSIX, use the packaging workflow supported by `@vscode/vsce`.
 
--  [github copilot chat](https://github.com/microsoft/vscode-copilot-chat)
+## Contributing and upstream sync
+
+Use this repository for fork-specific issues and changes. When syncing upstream, review behavior and configuration changes carefully; the fork has independent modifications to the Ghost, NES, model adapters, settings, and tests.
+
+- Fork: [mumingluan/copilot-completion](https://github.com/mumingluan/copilot-completion)
+- Upstream: [spite-triangle/copilot-completion](https://github.com/spite-triangle/copilot-completion)
 
 ## License
 
-[MIT](LICENSE.txt)
+This fork retains the upstream [MIT license](LICENSE.txt). See the repository for applicable notices and attributions.

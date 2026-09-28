@@ -59,7 +59,11 @@ export function buildPattern(input: string | undefined): RegExp | undefined {
         if (new RegExp(expression).test('')) {
             return undefined; // 空匹配拒绝
         }
-        return flags ? new RegExp(expression, flags) : new RegExp(expression);
+        // Always group the user expression. VS Code language word patterns are
+        // frequently composed with alternation; without grouping, a fragment
+        // such as `foo|bar` changes the precedence of the surrounding pattern.
+        const grouped = `(?:${expression})`;
+        return flags ? new RegExp(grouped, flags) : new RegExp(grouped);
     } catch {
         return undefined; // 非法正则（body 或 flags 不合法）
     }

@@ -26,20 +26,9 @@ export class WhitespaceOnlyFilter implements IEditFilter {
     readonly name = 'WhitespaceOnlyFilter';
 
     shouldReject(editLines: string[], editWindowLines: string[]): boolean {
-        const nonWsEdit = editLines.filter(l => l.trim()).join('\n');
-        const nonWsOrig = editWindowLines.filter(l => l.trim()).join('\n');
+        const nonWsEdit = editLines.join('').replace(/\s/g, '');
+        const nonWsOrig = editWindowLines.join('').replace(/\s/g, '');
         return nonWsEdit === nonWsOrig;
-    }
-}
-
-export class CommentOnlyFilter implements IEditFilter {
-    readonly name = 'CommentOnlyFilter';
-
-    shouldReject(editLines: string[], _editWindowLines: string[]): boolean {
-        return !editLines.some(l => {
-            const trimmed = l.trim();
-            return trimmed && !trimmed.startsWith('//') && !trimmed.startsWith('#') && !trimmed.startsWith('/*');
-        });
     }
 }
 
@@ -50,8 +39,6 @@ export class EditFilterChain {
         this.filters = filters ?? [
             new EmptyEditFilter(),
             new NoopEditFilter(),
-            new WhitespaceOnlyFilter(),
-            new CommentOnlyFilter(),
         ];
     }
 

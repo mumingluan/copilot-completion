@@ -3,9 +3,7 @@ import { MultilineContextBuilder } from '../../../completions/ghost/multiline/Mu
 import { DefaultMultilineStrategy } from '../../../completions/ghost/multiline/DefaultMultilineStrategy';
 
 suite('Multiline integration — FIM regression', () => {
-    test('C++ FIM: line-end + non-empty suffix → multiline=true (SuffixPresenceDetector)', async () => {
-        // SuffixPresenceDetector fires for non-TS/JS/Python languages
-        // when cursor is at end of line and suffix has content.
+    test('C++ uses native server-mode multiline with later document text', async () => {
         const strategy = new DefaultMultilineStrategy();
         const builder = new MultilineContextBuilder();
 
@@ -59,7 +57,6 @@ suite('Multiline integration — FIM regression', () => {
         });
 
         const result = await strategy.determineMultiline(ctx);
-        // SuffixPresenceDetector: !isMiddleOfTheLine && suffix.trim() !== '' → multiline
         assert.strictEqual(result, true);
     });
 

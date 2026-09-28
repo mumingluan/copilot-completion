@@ -1,6 +1,6 @@
-import { ILLMAdapter } from './llmAdapter';
+import { ILLMAdapter, applyPromptContext } from './llmAdapter';
 import { LLMRequest, LLMResponse, LLMError, normalizeBody } from './llmRequest';
-import { readSSEStream, splitChunk, SSEChunk } from './sseStream';
+import { iterateSSEStream, readSSEStream } from './sseStream';
 import { ILogService } from '../log/logService';
 
 export class OpenAIFimCompletionAdapter implements ILLMAdapter {
@@ -26,6 +26,7 @@ export class OpenAIFimCompletionAdapter implements ILLMAdapter {
             stream: request.stream,
             stop: request.stop,
         };
+        applyPromptContext(bodyObj, request.context, request.extra);
 
         const body = JSON.stringify(bodyObj);
         const response = await fetch(url, {
@@ -80,6 +81,7 @@ export class OpenAIFimCompletionAdapter implements ILLMAdapter {
             stream: true,   // sendStream() 始终强制流式，忽略 request.stream 的值
             stop: request.stop,
         };
+        applyPromptContext(bodyObj, request.context, request.extra);
 
         const body = JSON.stringify(bodyObj);
 
@@ -108,40 +110,14 @@ export class OpenAIFimCompletionAdapter implements ILLMAdapter {
         // 真 SSE 流式：逐 token 输出（choices[0].text 增量，与 /completions 一致）
         let fullText = '';
         let finishReason = 'stop';
-        const stream = response.body!.pipeThrough(new TextDecoderStream());
-        const reader = stream.getReader();
-        let extra = '';
-        try {
-            while (true) {
-                if (signal?.aborted) {
-                    return { text: fullText, finishReason };
-                }
-                const { value: rawChunk, done } = await reader.read();
-                if (done) break;
-                const chunkStr = rawChunk ?? '';
-                const [lines, remainder] = splitChunk(extra + chunkStr);
-                extra = remainder;
-                for (const line of lines) {
-                    if (line.startsWith(':')) continue;
-                    const data = line.slice('data:'.length).trim();
-                    if (data === '[DONE]') {
-                        return { text: fullText, finishReason };
-                    }
-                    try {
-                        const json = JSON.parse(data) as SSEChunk;
-                        const choice = json.choices?.[0];
-                        const cumulative = this._extractContent(choice as Record<string, unknown> | undefined);
-                        if (cumulative) {
-                            fullText += cumulative;
-                            yield cumulative;
-                        }
-                        if (choice?.finish_reason) finishReason = choice.finish_reason;
-                    } catch { /* skip malformed JSON */ }
-                }
+        for await (const json of iterateSSEStream(response, signal)) {
+            const choice = json.choices?.[0];
+            const chunk = this._extractContent(choice as Record<string, unknown> | undefined);
+            if (chunk) {
+                fullText += chunk;
+                yield chunk;
             }
-        } finally {
-            try { await reader.cancel(); } catch { /* ignore */ }
-            try { await response.body?.cancel(); } catch { /* ignore */ }
+            if (choice?.finish_reason) finishReason = choice.finish_reason;
         }
         return { text: fullText, finishReason };
     }
@@ -159,9 +135,14 @@ export class OpenAIFimCompletionAdapter implements ILLMAdapter {
     private _parseJSON(raw: string): LLMResponse {
         const json = JSON.parse(raw) as Record<string, unknown>;
         const choices = json.choices as Array<Record<string, unknown>>;
+        const parsedChoices = (choices ?? []).map(choice => ({
+            text: this._extractContent(choice),
+            finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : 'stop',
+        }));
         return {
-            text: this._extractContent(choices[0]),
-            finishReason: choices[0]?.finish_reason as string || 'stop',
+            text: parsedChoices[0]?.text ?? '',
+            finishReason: parsedChoices[0]?.finishReason ?? 'stop',
+            choices: parsedChoices,
         };
     }
 }

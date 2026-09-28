@@ -78,7 +78,7 @@ suite('InlineSuggestionResolver', () => {
         assert.strictEqual(result, undefined);
     });
 
-    test('strips common line prefix for multi-line edit', () => {
+    test('rejects multi-line edit that changes text before the cursor', () => {
         const doc = mockDoc([
             'line1: same prefix',
             'line2: same prefix but different end',
@@ -91,9 +91,21 @@ suite('InlineSuggestionResolver', () => {
             'line3: different',
         ].join('\n');
         const result = resolver.resolve(new vscode.Position(1, 31), doc, range, newText);
+        assert.strictEqual(result, undefined);
+    });
+
+    test('rebases a multi-line edit that starts at the cursor', () => {
+        const doc = mockDoc([
+            'const value = old();',
+            'return value;',
+        ]);
+        const cursor = new vscode.Position(0, 20);
+        const range = new vscode.Range(0, 20, 1, 13);
+        const result = resolver.resolve(cursor, doc, range, 'new();\nreturn value;');
         assert.ok(result);
-        assert.strictEqual(result.range.start.line, 1);
-        assert.strictEqual(result.range.end.line, 2);
+        assert.strictEqual(result.range.start.line, 0);
+        assert.strictEqual(result.range.start.character, 20);
+        assert.strictEqual(result.range.end.line, 0);
     });
 
     test('handles next-line insertion rewrite', () => {
@@ -106,6 +118,28 @@ suite('InlineSuggestionResolver', () => {
         assert.strictEqual(result.range.start.line, 0);
         assert.strictEqual(result.range.start.character, 11);
         assert.ok(result.newText.includes('const b = 2;'));
+    });
+
+    test('handles next-line insertion rewrite in a CRLF document', async () => {
+        const doc = await vscode.workspace.openTextDocument({
+            language: 'typescript', content: 'const a = 1\r\n',
+        });
+        assert.strictEqual(doc.eol, vscode.EndOfLine.CRLF);
+        const cursor = new vscode.Position(0, 11);
+        const range = new vscode.Range(1, 0, 1, 0);
+        assert.strictEqual(resolver.resolve(cursor, doc, range, 'const b = 2;\n'), undefined);
+        const result = resolver.resolve(cursor, doc, range, 'const b = 2;\r\n');
+        assert.ok(result);
+        assert.deepStrictEqual(result.range, new vscode.Range(cursor, cursor));
+        assert.ok(result.newText.includes('const b = 2;'));
+        const original = await vscode.workspace.openTextDocument({ language: 'typescript', content: 'const a = 1\r\n' });
+        const originalEdit = new vscode.WorkspaceEdit();
+        originalEdit.replace(original.uri, range, 'const b = 2;\r\n');
+        const ghostEdit = new vscode.WorkspaceEdit();
+        ghostEdit.replace(doc.uri, result.range, result.newText);
+        assert.strictEqual(await vscode.workspace.applyEdit(originalEdit), true);
+        assert.strictEqual(await vscode.workspace.applyEdit(ghostEdit), true);
+        assert.strictEqual(doc.getText(), original.getText());
     });
 
     test('isSubword returns true for subsequence', () => {

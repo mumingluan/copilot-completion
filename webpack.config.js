@@ -4,6 +4,7 @@
 
 const path = require('path');
 const CopyPlugin = require('copy-webpack-plugin');
+const wasmLanguages = ['python', 'javascript', 'typescript', 'tsx', 'go', 'ruby', 'java', 'php', 'cpp'];
 
 //@ts-check
 /** @typedef {import('webpack').Configuration} WebpackConfig **/
@@ -13,7 +14,14 @@ const extensionConfig = {
   plugins: [
     new CopyPlugin({
       patterns: [
-        { from: 'dist/wasm', to: 'wasm' },
+        { from: 'node_modules/web-tree-sitter/tree-sitter.wasm', to: 'wasm/tree-sitter.wasm' },
+        { from: 'resources/tokenizer/o200k_base.tiktoken', to: 'tokenizer/o200k_base.tiktoken' },
+        { from: 'resources/tokenizer/LICENSE.txt', to: 'tokenizer/LICENSE.txt' },
+        ...wasmLanguages.map(language => ({
+          from: `node_modules/tree-sitter-wasms/out/tree-sitter-${language}.wasm`,
+          to: `wasm/tree-sitter-${language}.wasm`,
+        })),
+        { from: 'node_modules/tree-sitter-wasms/out/tree-sitter-c_sharp.wasm', to: 'wasm/tree-sitter-c-sharp.wasm' },
       ],
     }),
   ],

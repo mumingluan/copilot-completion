@@ -40,6 +40,13 @@ export interface UserPromptResult {
 	readonly nDiffsInPrompt: number;
 	readonly diffTokensInPrompt: number;
 	readonly neighborSnippetsResult: AppendNeighborFileSnippetsResult | undefined;
+	readonly sectionTokens: {
+		readonly recent: number;
+		readonly neighbor: number;
+		readonly diff: number;
+		readonly current: number;
+		readonly area: number;
+	};
 }
 
 export function getUserPrompt(promptPieces: PromptPieces): UserPromptResult {
@@ -77,12 +84,25 @@ ${editDiffHistory}
 ${PromptTags.EDIT_HISTORY.end}`;
 
 	const mainPrompt = basePrompt +  ( opts.includeEditCode ? `\n\n${areaAroundCodeToEdit}` : "");
-	const packagedPromptWithRelatedInfo = addRelatedInformation(relatedInformation, mainPrompt, opts.languageContext.traitPosition);
+	const packagedPrompt = opts.promptingStrategy === PromptingStrategy.Xtab275
+		? `\`\`\`\n${mainPrompt}\n\`\`\``
+		: mainPrompt;
+	const packagedPromptWithRelatedInfo = addRelatedInformation(relatedInformation, packagedPrompt, opts.languageContext.traitPosition);
 	const prompt = packagedPromptWithRelatedInfo + postScript;
 
 	const trimmedPrompt = prompt.trim();
 
-	return { prompt: trimmedPrompt, nDiffsInPrompt, diffTokensInPrompt, neighborSnippetsResult };
+	const neighborTokens = neighborSnippetsResult?.tokensConsumed ?? 0;
+	return {
+		prompt: trimmedPrompt, nDiffsInPrompt, diffTokensInPrompt, neighborSnippetsResult,
+		sectionTokens: {
+			recent: Math.max(0, computeTokens(recentlyViewedCodeSnippets) - neighborTokens),
+			neighbor: neighborTokens,
+			diff: diffTokensInPrompt,
+			current: computeTokens(currentFileContent),
+			area: computeTokens(areaAroundCodeToEdit),
+		},
+	};
 }
 
 function addRelatedInformation(relatedInformation: string, prompt: string, position: 'before' | 'after'): string {
